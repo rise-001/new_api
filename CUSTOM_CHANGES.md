@@ -113,9 +113,9 @@ git push origin custom
 
 `.github/workflows/custom-ghcr.yml` 会在 `custom` 分支每次推送后自动构建并发布以下多架构镜像（支持 `linux/amd64` 和 `linux/arm64`）：
 
-- `ghcr.io/rise-001/new_api:latest`
-- `ghcr.io/rise-001/new_api:custom`
-- `ghcr.io/rise-001/new_api:sha-<提交短哈希>`
+- `ghcr.io/rise-001/new-api-custom:latest`
+- `ghcr.io/rise-001/new-api-custom:custom`
+- `ghcr.io/rise-001/new-api-custom:sha-<提交短哈希>`
 
 工作流使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要配置 Docker Hub 密钥。首次发布后，如果希望未登录的服务器直接拉取镜像，需要在 GitHub 仓库的 Packages 页面把软件包可见性设置为 Public。
 
