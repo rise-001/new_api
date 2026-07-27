@@ -53,6 +53,7 @@ const headerNavSchema = z.object({
   console: z.boolean(),
   pricingEnabled: z.boolean(),
   pricingRequireAuth: z.boolean(),
+  pricingOverviewMetricsAdminOnly: z.boolean(),
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
   docs: z.boolean(),
@@ -81,6 +82,10 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.pricing?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.pricing.requireAuth
       : Boolean(config.pricing.requireAuth),
+  pricingOverviewMetricsAdminOnly:
+    config.pricing?.overviewMetricsAdminOnly === undefined
+      ? HEADER_NAV_DEFAULT.pricing.overviewMetricsAdminOnly
+      : Boolean(config.pricing.overviewMetricsAdminOnly),
   rankingsEnabled:
     config.rankings?.enabled === undefined
       ? HEADER_NAV_DEFAULT.rankings.enabled
@@ -125,6 +130,7 @@ export function HeaderNavigationSection({
         ...(config.pricing ?? HEADER_NAV_DEFAULT.pricing),
         enabled: values.pricingEnabled,
         requireAuth: values.pricingRequireAuth,
+        overviewMetricsAdminOnly: values.pricingOverviewMetricsAdminOnly,
       },
       rankings: {
         ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
@@ -183,6 +189,10 @@ export function HeaderNavigationSection({
     description: string
     requireAuthTitle: string
     requireAuthDescription: string
+    overviewMetricsAdminOnlyKey?: 'pricingOverviewMetricsAdminOnly'
+    overviewMetricsAdminOnlyTitle?: string
+    overviewMetricsAdminOnlyDescription?: string
+    overviewMetricsAdminOnlyAdditionalDescription?: string
   }> = [
     {
       enabledKey: 'pricingEnabled',
@@ -193,6 +203,14 @@ export function HeaderNavigationSection({
       requireAuthTitle: t('Require login to view models'),
       requireAuthDescription: t(
         'Visitors must authenticate before accessing the pricing directory.'
+      ),
+      overviewMetricsAdminOnlyKey: 'pricingOverviewMetricsAdminOnly',
+      overviewMetricsAdminOnlyTitle: t('Show overview metrics to admins only'),
+      overviewMetricsAdminOnlyDescription: t(
+        'Hide TPS, average latency, and success rate from non-admin users.'
+      ),
+      overviewMetricsAdminOnlyAdditionalDescription: t(
+        'This also hides the Performance tab.'
       ),
     },
     {
@@ -291,6 +309,40 @@ export function HeaderNavigationSection({
                     </SettingsControlChildren>
                   )}
                 />
+
+                {module.overviewMetricsAdminOnlyKey ? (
+                  <FormField
+                    control={form.control}
+                    name={module.overviewMetricsAdminOnlyKey}
+                    render={({ field }) => (
+                      <SettingsControlChildren>
+                        <SettingsSwitchItem className='py-2'>
+                          <SettingsSwitchContent>
+                            <FormLabel>
+                              {module.overviewMetricsAdminOnlyTitle}
+                            </FormLabel>
+                            <FormDescription>
+                              {module.overviewMetricsAdminOnlyDescription}{' '}
+                              {
+                                module.overviewMetricsAdminOnlyAdditionalDescription
+                              }
+                            </FormDescription>
+                          </SettingsSwitchContent>
+                          <FormControl>
+                            <Switch
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              disabled={
+                                !form.watch(module.requireAuthDependsOn)
+                              }
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </SettingsSwitchItem>
+                      </SettingsControlChildren>
+                    )}
+                  />
+                ) : null}
               </SettingsControlGroup>
             ))}
           </div>

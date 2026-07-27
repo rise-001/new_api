@@ -21,14 +21,18 @@ export type HeaderNavAccessConfig = {
   requireAuth: boolean
 }
 
+export type HeaderNavPricingConfig = HeaderNavAccessConfig & {
+  overviewMetricsAdminOnly: boolean
+}
+
 export type HeaderNavModulesConfig = {
   home: boolean
   console: boolean
-  pricing: HeaderNavAccessConfig
+  pricing: HeaderNavPricingConfig
   rankings: HeaderNavAccessConfig
   docs: boolean
   about: boolean
-  [key: string]: boolean | HeaderNavAccessConfig
+  [key: string]: boolean | HeaderNavAccessConfig | HeaderNavPricingConfig
 }
 
 export type SidebarSectionConfig = {
@@ -44,6 +48,7 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   pricing: {
     enabled: true,
     requireAuth: false,
+    overviewMetricsAdminOnly: false,
   },
   rankings: {
     enabled: true,
@@ -124,6 +129,25 @@ const parseAccessModule = (
   return { ...fallback }
 }
 
+const parsePricingModule = (
+  raw: unknown,
+  fallback: HeaderNavPricingConfig
+): HeaderNavPricingConfig => {
+  const access = parseAccessModule(raw, fallback)
+  const record =
+    raw && typeof raw === 'object'
+      ? (raw as Record<string, unknown>)
+      : undefined
+
+  return {
+    ...access,
+    overviewMetricsAdminOnly: toBoolean(
+      record?.overviewMetricsAdminOnly,
+      fallback.overviewMetricsAdminOnly
+    ),
+  }
+}
+
 const cloneSidebarDefault = (): SidebarModulesAdminConfig =>
   Object.entries(SIDEBAR_MODULES_DEFAULT).reduce<SidebarModulesAdminConfig>(
     (acc, [section, config]) => {
@@ -150,7 +174,7 @@ export function parseHeaderNavModules(
 
     Object.entries(parsed).forEach(([key, raw]) => {
       if (key === 'pricing') {
-        result.pricing = parseAccessModule(raw, base.pricing)
+        result.pricing = parsePricingModule(raw, base.pricing)
         return
       }
       if (key === 'rankings') {

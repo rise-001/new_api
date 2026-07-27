@@ -20,22 +20,30 @@ import { getStatus } from '@/lib/api'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
 
+export type PricingModuleAccess = ModuleAccess & {
+  overviewMetricsAdminOnly: boolean
+}
+
 export type HeaderNavModule = 'rankings' | 'pricing'
 
 export type HeaderNavModules = {
   home: boolean
   console: boolean
-  pricing: ModuleAccess
+  pricing: PricingModuleAccess
   rankings: ModuleAccess
   docs: boolean
   about: boolean
-  [key: string]: boolean | ModuleAccess
+  [key: string]: boolean | ModuleAccess | PricingModuleAccess
 }
 
 const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
   home: true,
   console: true,
-  pricing: { enabled: true, requireAuth: false },
+  pricing: {
+    enabled: true,
+    requireAuth: false,
+    overviewMetricsAdminOnly: false,
+  },
   rankings: { enabled: true, requireAuth: false },
   docs: true,
   about: true,
@@ -93,6 +101,25 @@ function parseAccess(raw: unknown, fallback: ModuleAccess): ModuleAccess {
   return { ...fallback }
 }
 
+function parsePricingAccess(
+  raw: unknown,
+  fallback: PricingModuleAccess
+): PricingModuleAccess {
+  const access = parseAccess(raw, fallback)
+  const record =
+    raw && typeof raw === 'object'
+      ? (raw as Record<string, unknown>)
+      : undefined
+
+  return {
+    ...access,
+    overviewMetricsAdminOnly: parseHeaderNavBoolean(
+      record?.overviewMetricsAdminOnly,
+      fallback.overviewMetricsAdminOnly
+    ),
+  }
+}
+
 function parseHeaderNavRecord(raw: unknown): Record<string, unknown> | null {
   if (!raw || String(raw).trim() === '') return null
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>
@@ -111,7 +138,7 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
 
   Object.entries(parsed).forEach(([key, value]) => {
     if (key === 'pricing') {
-      result.pricing = parseAccess(value, result.pricing)
+      result.pricing = parsePricingAccess(value, result.pricing)
       return
     }
     if (key === 'rankings') {
