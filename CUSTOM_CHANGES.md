@@ -108,3 +108,28 @@ git push origin custom
 ```text
 请先完整阅读 AGENTS.md、web/AGENTS.md 和 CUSTOM_CHANGES.md，了解项目规范、分支策略和已有二开功能。后续修改必须保留现有二开行为，并评估与 upstream 更新的兼容性。
 ```
+
+## 2026-07-27：发布二开 Docker 镜像
+
+`.github/workflows/custom-ghcr.yml` 会在 `custom` 分支每次推送后自动构建并发布以下多架构镜像（支持 `linux/amd64` 和 `linux/arm64`）：
+
+- `ghcr.io/rise-001/new_api:latest`
+- `ghcr.io/rise-001/new_api:custom`
+- `ghcr.io/rise-001/new_api:sha-<提交短哈希>`
+
+工作流使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要配置 Docker Hub 密钥。首次发布后，如果希望未登录的服务器直接拉取镜像，需要在 GitHub 仓库的 Packages 页面把软件包可见性设置为 Public。
+
+使用现有完整 Compose 配置部署二开镜像：
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.custom.yml pull
+docker compose -f docker-compose.yml -f docker-compose.custom.yml up -d
+```
+
+部署前必须修改 `docker-compose.yml` 中 PostgreSQL 和 Redis 的默认密码，并同步修改 `SQL_DSN`、`REDIS_CONN_STRING`。生产环境还应设置随机的 `SESSION_SECRET`。
+
+如果镜像保持 Private，需要先使用具有 `read:packages` 权限的 GitHub Personal Access Token 登录：
+
+```powershell
+$env:GHCR_TOKEN | docker login ghcr.io -u rise-001 --password-stdin
+```

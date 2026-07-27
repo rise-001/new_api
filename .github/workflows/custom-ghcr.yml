@@ -1,0 +1,143 @@
+name: Publish custom Docker image (GHCR)
+
+on:
+  push:
+    branches:
+      - custom
+  workflow_dispatch:
+
+concurrency:
+  group: custom-ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  prepare:
+    name: Prepare image tags
+    runs-on: ubuntu-latest
+    outputs:
+      sha_tag: ${{ steps.version.outputs.sha_tag }}
+      version: ${{ steps.version.outputs.version }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out custom branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: Resolve image tags
+        id: version
+        shell: bash
+        run: |
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          echo "sha_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=custom-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+  build_single_arch:
+    name: Build and push (${{ matrix.arch }})
+    needs: [prepare]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: Write VERSION
+        shell: bash
+        run: echo "${{ needs.prepare.outputs.version }}" > VERSION
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:custom-${{ matrix.arch }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sha_tag }}-${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=custom-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=custom-${{ matrix.arch }}
+          provenance: mode=max
+          sbom: true
+
+  create_manifests:
+    name: Create multi-architecture image
+    needs: [prepare, build_single_arch]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Create and push manifests
+        shell: bash
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          SHA_TAG="${{ needs.prepare.outputs.sha_tag }}"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest" \
+            --tag "${IMAGE}:custom" \
+            "${IMAGE}:custom-amd64" \
+            "${IMAGE}:custom-arm64"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${SHA_TAG}" \
+            "${IMAGE}:${SHA_TAG}-amd64" \
+            "${IMAGE}:${SHA_TAG}-arm64"
+
+      - name: Image summary
+        shell: bash
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          {
+            echo "### Published custom image"
+            echo '```text'
+            echo "${IMAGE}:latest"
+            echo "${IMAGE}:custom"
+            echo "${IMAGE}:${{ needs.prepare.outputs.sha_tag }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
