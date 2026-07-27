@@ -62,6 +62,16 @@
 - `web/src/i18n/locales/*.json`
   - 已补齐英文、简体中文、繁体中文、法语、日语、俄语和越南语文案
 
+### 模型卡片补充改动
+
+补充提交：`89fe12c2 fix: hide model card performance from users`
+
+- 开启 `overviewMetricsAdminOnly` 后，普通用户的模型卡片不会渲染右下角“延迟、吞吐、状态”摘要
+- 无权限时 `perf-metrics-summary` 查询被禁用，避免只隐藏界面但仍请求卡片性能数据
+- 管理员和超级管理员保持原有显示；关闭开关时普通用户也保持原有显示
+- 本次提交只修改 3 个文件：业务组件、回归测试和本文档；实际生产代码改动集中在 `model-card-grid.tsx`
+- 对应公开镜像从 `ghcr.io/rise-001/new-api-custom:latest` 获取，固定功能版本可使用 `ghcr.io/rise-001/new-api-custom:sha-89fe12c`
+
 ### 测试
 
 相关回归测试：
@@ -72,11 +82,13 @@
 已验证：
 
 - 9 条回归测试通过
-- TypeScript 类型检查通过
+- 本次涉及文件的定向 TypeScript 类型检查通过
 - 涉及文件 lint 通过
-- 全仓前端格式检查通过
+- 涉及文件格式检查通过
 - i18n 同步报告无缺失
 - Rsbuild 生产构建通过
+
+当前全量 TypeScript 检查会被仓库其他位置的已有问题阻断：`web/src/features/setup/setup-wizard.tsx` 导入了 `admin-step.tsx` 没有导出的 `AdminStep`。该问题与模型性能权限改动无关；后续合并上游时应重新检查它是否已修复。
 
 ### 权限边界
 
@@ -123,6 +135,8 @@ git push origin custom
 
 工作流使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要配置 Docker Hub 密钥。首次发布后，如果希望未登录的服务器直接拉取镜像，需要在 GitHub 仓库的 Packages 页面把软件包可见性设置为 Public。
 
+当前 `ghcr.io/rise-001/new-api-custom` 已验证可以匿名拉取。不要改回 `ghcr.io/rise-001/new_api`：该名称曾因账号下同名包权限冲突返回 `permission_denied: write_package`，因此二开镜像使用独立名称 `new-api-custom`。
+
 使用现有完整 Compose 配置部署二开镜像：
 
 ```powershell
@@ -137,3 +151,24 @@ docker compose -f docker-compose.yml -f docker-compose.custom.yml up -d
 ```powershell
 $env:GHCR_TOKEN | docker login ghcr.io -u rise-001 --password-stdin
 ```
+
+### 当前服务器部署方式
+
+- 对外端口：`8899`
+- SQLite 数据目录：`/opt/new-api/data`
+- 日志目录：`/opt/new-api/logs`
+- 容器名称：`new-api`
+
+首次部署：
+
+```bash
+docker run -d --name new-api --restart always -p 8899:3000 -e TZ=Asia/Shanghai -e ERROR_LOG_ENABLED=true -v /opt/new-api/data:/data -v /opt/new-api/logs:/app/logs ghcr.io/rise-001/new-api-custom:latest --log-dir /app/logs
+```
+
+更新镜像并重建容器：
+
+```bash
+cd /opt/new-api && docker pull ghcr.io/rise-001/new-api-custom:latest && docker stop new-api && docker rm new-api && docker run -d --name new-api --restart always -p 8899:3000 -e TZ=Asia/Shanghai -e ERROR_LOG_ENABLED=true -v /opt/new-api/data:/data -v /opt/new-api/logs:/app/logs ghcr.io/rise-001/new-api-custom:latest --log-dir /app/logs
+```
+
+仅执行 `docker restart new-api` 不会切换到新镜像，必须拉取镜像并重建容器。删除容器不会删除上述宿主机挂载目录中的数据和日志。
