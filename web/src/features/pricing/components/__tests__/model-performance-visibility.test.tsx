@@ -34,6 +34,7 @@ const domGlobals = [
   'Element',
   'Event',
   'CustomEvent',
+  'customElements',
   'MutationObserver',
   'requestAnimationFrame',
   'cancelAnimationFrame',
@@ -57,6 +58,7 @@ const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { Tabs } = await import('@/components/ui/tabs')
 const { ROLE } = await import('@/lib/roles')
 const { useAuthStore } = await import('@/stores/auth-store')
+const { ModelCardGrid } = await import('../model-card-grid')
 const { ModelDetailsTabList } = await import('../model-details-tab-list')
 const { ModelOverviewSummary } = await import('../model-overview-summary')
 
@@ -68,9 +70,12 @@ await i18n.use(initReactI18next).init({
       translation: {
         'Average latency': 'Average latency',
         API: 'API',
+        'Latency short': 'Latency',
         Overview: 'Overview',
         Performance: 'Performance',
+        'Status short': 'Status',
         'Success rate': 'Success rate',
+        'Throughput short': 'Throughput',
       },
     },
   },
@@ -149,6 +154,55 @@ async function renderSummary(options: {
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
           <ModelOverviewSummary model={model} />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+  })
+
+  return { container, queryClient, root }
+}
+
+async function renderCardGrid(options: {
+  overviewMetricsAdminOnly: boolean
+  role: number
+}) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  queryClient.setQueryData(
+    ['status'],
+    buildStatus(options.overviewMetricsAdminOnly)
+  )
+  queryClient.setQueryData(['perf-metrics-summary', 24], {
+    success: true,
+    data: {
+      models: [
+        {
+          model_name: model.model_name,
+          avg_latency_ms: 800,
+          success_rate: 99,
+          avg_tps: 25,
+          recent_success_rates: [99, 99, 99],
+        },
+      ],
+    },
+  })
+
+  useAuthStore.getState().auth.setUser({
+    id: 1,
+    username: 'viewer',
+    role: options.role,
+  })
+
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <ModelCardGrid models={[model]} onModelClick={() => undefined} />
         </I18nextProvider>
       </QueryClientProvider>
     )
@@ -236,6 +290,33 @@ describe('model performance visibility', () => {
     })
 
     assert.match(rendered.container.textContent ?? '', /TPS/)
+
+    await cleanupRendered(rendered)
+  })
+
+  test('hides card performance metrics from a regular user', async () => {
+    const rendered = await renderCardGrid({
+      overviewMetricsAdminOnly: true,
+      role: ROLE.USER,
+    })
+
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /Latency|Throughput|Status/
+    )
+
+    await cleanupRendered(rendered)
+  })
+
+  test('keeps card performance metrics visible to an administrator', async () => {
+    const rendered = await renderCardGrid({
+      overviewMetricsAdminOnly: true,
+      role: ROLE.ADMIN,
+    })
+
+    assert.match(rendered.container.textContent ?? '', /Latency/)
+    assert.match(rendered.container.textContent ?? '', /Throughput/)
+    assert.match(rendered.container.textContent ?? '', /Status/)
 
     await cleanupRendered(rendered)
   })
