@@ -252,6 +252,7 @@ func runSystemTaskClaimPass(runnerID string) {
 			runWithLeaseHeartbeat(dispatchTask, runnerID, func(ctx context.Context) {
 				dispatchHandler.Run(ctx, dispatchTask, runnerID)
 			})
+			notifySystemTaskRunner()
 		})
 	}
 }

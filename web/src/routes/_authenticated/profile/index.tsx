@@ -17,9 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute } from '@tanstack/react-router'
+import { z } from 'zod'
 
+import { ConsumptionExports } from '@/features/consumption-exports'
 import { Profile } from '@/features/profile'
 
-export const Route = createFileRoute('/_authenticated/profile/')({
-  component: Profile,
+const profileSearchSchema = z.object({
+  view: z.enum(['profile', 'consumption']).optional(),
 })
+
+export const Route = createFileRoute('/_authenticated/profile/')({
+  component: RouteComponent,
+  validateSearch: profileSearchSchema,
+})
+
+function RouteComponent() {
+  const { view } = Route.useSearch()
+  return view === 'consumption' ? <ConsumptionExports /> : <Profile />
+}

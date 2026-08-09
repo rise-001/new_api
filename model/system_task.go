@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -15,12 +16,14 @@ const (
 	SystemTaskStatusRunning   SystemTaskStatus = "running"
 	SystemTaskStatusSucceeded SystemTaskStatus = "succeeded"
 	SystemTaskStatusFailed    SystemTaskStatus = "failed"
+	SystemTaskStatusCanceled  SystemTaskStatus = "canceled"
 
-	SystemTaskTypeLogCleanup     = "log_cleanup"
-	SystemTaskTypeChannelTest    = "channel_test"
-	SystemTaskTypeModelUpdate    = "model_update"
-	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
-	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
+	SystemTaskTypeLogCleanup        = "log_cleanup"
+	SystemTaskTypeChannelTest       = "channel_test"
+	SystemTaskTypeModelUpdate       = "model_update"
+	SystemTaskTypeMidjourneyPoll    = "midjourney_poll"
+	SystemTaskTypeAsyncTaskPoll     = "async_task_poll"
+	SystemTaskTypeConsumptionExport = "consumption_export"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
@@ -28,6 +31,7 @@ var ErrSystemTaskLockLost = errors.New("system task lock lost")
 type SystemTask struct {
 	ID        int64            `json:"id" gorm:"primary_key"`
 	TaskID    string           `json:"task_id" gorm:"type:varchar(64);uniqueIndex"`
+	UserID    int              `json:"user_id" gorm:"index"`
 	Type      string           `json:"type" gorm:"type:varchar(64);index"`
 	Status    SystemTaskStatus `json:"status" gorm:"type:varchar(32);index"`
 	ActiveKey *string          `json:"active_key,omitempty" gorm:"type:varchar(64);uniqueIndex"`
@@ -51,6 +55,7 @@ type SystemTaskLock struct {
 type SystemTaskResponse struct {
 	ID        int64            `json:"id"`
 	TaskID    string           `json:"task_id"`
+	UserID    int              `json:"user_id"`
 	Type      string           `json:"type"`
 	Status    SystemTaskStatus `json:"status"`
 	ActiveKey *string          `json:"active_key,omitempty"`
@@ -90,6 +95,18 @@ func GenerateSystemTaskID() (string, error) {
 }
 
 func CreateSystemTask(taskType string, payload any, state any) (*SystemTask, error) {
+	return createSystemTask(taskType, 0, taskType, payload, state)
+}
+
+func CreateUserSystemTask(taskType string, userID int, payload any, state any) (*SystemTask, error) {
+	if userID <= 0 {
+		return nil, errors.New("user id is required")
+	}
+	activeKey := fmt.Sprintf("%s:%d", taskType, userID)
+	return createSystemTask(taskType, userID, activeKey, payload, state)
+}
+
+func createSystemTask(taskType string, userID int, activeKey string, payload any, state any) (*SystemTask, error) {
 	taskID, err := GenerateSystemTaskID()
 	if err != nil {
 		return nil, err
@@ -105,9 +122,10 @@ func CreateSystemTask(taskType string, payload any, state any) (*SystemTask, err
 
 	task := &SystemTask{
 		TaskID:    taskID,
+		UserID:    userID,
 		Type:      taskType,
 		Status:    SystemTaskStatusPending,
-		ActiveKey: &taskType,
+		ActiveKey: &activeKey,
 		Payload:   payloadText,
 		State:     stateText,
 	}
@@ -116,6 +134,20 @@ func CreateSystemTask(taskType string, payload any, state any) (*SystemTask, err
 		return nil, err
 	}
 	return task, nil
+}
+
+func GetActiveUserSystemTask(taskType string, userID int) (*SystemTask, error) {
+	var task SystemTask
+	err := DB.Where("type = ? AND user_id = ? AND status IN ?", taskType, userID, activeSystemTaskStatuses()).
+		Order("id desc").
+		First(&task).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &task, nil
 }
 
 func GetSystemTaskByTaskID(taskID string) (*SystemTask, error) {
@@ -185,6 +217,57 @@ func ListSystemTasks(limit int) ([]*SystemTask, error) {
 	var tasks []*SystemTask
 	err := DB.Order("id desc").Limit(limit).Find(&tasks).Error
 	return tasks, err
+}
+
+func ListUserSystemTasks(userID int, taskType string, status SystemTaskStatus, offset int, limit int) ([]*SystemTask, int64, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	tx := DB.Model(&SystemTask{}).Where("user_id = ? AND type = ?", userID, taskType)
+	if status != "" {
+		tx = tx.Where("status = ?", status)
+	}
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var tasks []*SystemTask
+	if err := tx.Order("id desc").Offset(offset).Limit(limit).Find(&tasks).Error; err != nil {
+		return nil, 0, err
+	}
+	return tasks, total, nil
+}
+
+func CancelUserSystemTask(taskID string, userID int, taskType string) (bool, error) {
+	returnValue := false
+	err := DB.Transaction(func(transaction *gorm.DB) error {
+		result := transaction.Model(&SystemTask{}).
+			Where("task_id = ? AND user_id = ? AND type = ? AND status IN ?", taskID, userID, taskType, activeSystemTaskStatuses()).
+			Updates(map[string]any{
+				"status":     SystemTaskStatusCanceled,
+				"active_key": nil,
+				"locked_by":  "",
+				"updated_at": common.GetTimestamp(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		if err := transaction.Where("task_id = ?", taskID).Delete(&SystemTaskLock{}).Error; err != nil {
+			return err
+		}
+		returnValue = true
+		return nil
+	})
+	return returnValue, err
 }
 
 // GetLatestSystemTask returns the most recent task row of the given type
@@ -417,6 +500,7 @@ func (task *SystemTask) ToResponse() SystemTaskResponse {
 	return SystemTaskResponse{
 		ID:        task.ID,
 		TaskID:    task.TaskID,
+		UserID:    task.UserID,
 		Type:      task.Type,
 		Status:    task.Status,
 		ActiveKey: task.ActiveKey,
