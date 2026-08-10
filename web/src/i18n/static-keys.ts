@@ -45,6 +45,9 @@ export const STATIC_I18N_KEYS = [
   'Routing Reliability',
   'Maintenance',
 
+  // Custom menus
+  'Save custom menus',
+
   // System info
   'online',
   'stale',

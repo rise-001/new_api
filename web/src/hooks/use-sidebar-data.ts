@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { LinkSquare01Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Activity,
   Box,
@@ -35,10 +37,23 @@ import {
   Users,
   Wallet,
 } from 'lucide-react'
+import { createElement, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import { useCustomMenus } from '@/hooks/use-custom-menus'
+import { CUSTOM_MENU_LOCATION, CUSTOM_MENU_OPEN_MODE } from '@/lib/custom-menus'
 import { ROLE } from '@/lib/roles'
+
+function CustomMenuIcon(
+  props: Omit<ComponentProps<typeof HugeiconsIcon>, 'icon'>
+) {
+  return createElement(HugeiconsIcon, {
+    icon: LinkSquare01Icon,
+    strokeWidth: 2,
+    ...props,
+  })
+}
 
 /**
  * Root navigation groups for the application sidebar.
@@ -48,6 +63,18 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const customMenuItems = useCustomMenus()
+  const chatMenuItems = customMenuItems
+    .filter((item) => item.location === CUSTOM_MENU_LOCATION.CHAT)
+    .map((item) => ({
+      title: item.name,
+      url:
+        item.openMode === CUSTOM_MENU_OPEN_MODE.EMBED
+          ? `/custom-menu/${item.id}`
+          : item.url,
+      icon: CustomMenuIcon,
+      external: item.openMode === CUSTOM_MENU_OPEN_MODE.NEW_TAB,
+    }))
 
   return {
     navGroups: [
@@ -65,6 +92,7 @@ export function useSidebarData(): SidebarData {
             icon: MessageSquare,
             type: 'chat-presets',
           },
+          ...chatMenuItems,
         ],
       },
       {

@@ -20,6 +20,10 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useStatus } from '@/hooks/use-status'
+import {
+  CUSTOM_MENU_LOCATION,
+  parseCustomMenuItemsFromStatus,
+} from '@/lib/custom-menus'
 import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -29,6 +33,7 @@ export type TopNavLink = {
   disabled?: boolean
   requiresAuth?: boolean
   external?: boolean
+  translateTitle?: boolean
 }
 
 /**
@@ -54,6 +59,10 @@ export function useTopNavLinks(): TopNavLink[] {
       status as Record<string, unknown> | null
     )
   }, [status])
+  const customMenuItems = useMemo(
+    () => parseCustomMenuItemsFromStatus(status),
+    [status]
+  )
 
   // Documentation link (may be external)
   const docsLink: string | undefined = status?.docs_link as string | undefined
@@ -98,6 +107,16 @@ export function useTopNavLinks(): TopNavLink[] {
   // About
   if (modules?.about !== false) {
     links.push({ title: t('About'), href: '/about' })
+  }
+
+  for (const item of customMenuItems) {
+    if (item.location !== CUSTOM_MENU_LOCATION.TOP) continue
+    links.push({
+      title: item.name,
+      href: item.url,
+      external: true,
+      translateTitle: false,
+    })
   }
 
   return links

@@ -29,6 +29,10 @@ export type SystemOptionsResponse = {
   data: SystemOption[]
 }
 
+export type CustomMenuSettings = {
+  CustomMenuItems: string
+}
+
 export type UpdateOptionRequest = {
   key: string
   value: string | boolean | number

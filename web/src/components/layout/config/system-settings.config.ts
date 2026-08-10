@@ -16,7 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type TFunction } from 'i18next'
+import { MenuSquareIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
+import type { TFunction } from 'i18next'
 import {
   Box,
   CreditCard,
@@ -26,6 +28,7 @@ import {
   ShieldAlert,
   Wrench,
 } from 'lucide-react'
+import { createElement, type ComponentProps } from 'react'
 
 import { getAuthSectionNavItems } from '@/features/system-settings/auth/section-registry.tsx'
 import { getBillingSectionNavItems } from '@/features/system-settings/billing/section-registry.tsx'
@@ -36,6 +39,16 @@ import { getSecuritySectionNavItems } from '@/features/system-settings/security/
 import { getSiteSectionNavItems } from '@/features/system-settings/site/section-registry.tsx'
 
 import type { NavGroup, SidebarView } from '../types'
+
+function CustomMenuSettingsIcon(
+  props: Omit<ComponentProps<typeof HugeiconsIcon>, 'icon'>
+) {
+  return createElement(HugeiconsIcon, {
+    icon: MenuSquareIcon,
+    strokeWidth: 2,
+    ...props,
+  })
+}
 
 /**
  * Sidebar nav groups for the System Settings nested view.
@@ -79,6 +92,11 @@ function getSystemSettingsNavGroups(t: TFunction): NavGroup[] {
           title: t('Console Content'),
           icon: Layout,
           items: getContentSectionNavItems(t),
+        },
+        {
+          title: t('Custom Menu Management'),
+          icon: CustomMenuSettingsIcon,
+          url: '/system-settings/custom-menu',
         },
         {
           title: t('Operations'),
