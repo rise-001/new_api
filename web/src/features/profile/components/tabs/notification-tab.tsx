@@ -79,7 +79,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
     gotify_token: '',
     gotify_priority: 5,
     accept_unset_model_ratio_model: false,
-    record_ip_log: false,
+    record_ip_log: true,
     upstream_model_update_notify_enabled: false,
   })
 
@@ -107,7 +107,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
         gotify_priority: parsed.gotify_priority ?? 5,
         accept_unset_model_ratio_model:
           parsed.accept_unset_model_ratio_model || false,
-        record_ip_log: parsed.record_ip_log || false,
+        record_ip_log: parsed.record_ip_log ?? true,
         upstream_model_update_notify_enabled:
           parsed.upstream_model_update_notify_enabled || false,
       })
@@ -125,7 +125,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
       } else {
         toast.error(response.message || t('Failed to update settings'))
       }
-    } catch (_error) {
+    } catch {
       toast.error(t('Failed to update settings'))
     } finally {
       setLoading(false)
@@ -143,8 +143,9 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
           value={[notifyType]}
           onValueChange={(value) => {
             const nextValue = value.find((item) => item !== notifyType)
-            if (nextValue)
+            if (nextValue) {
               updateField('notify_type', normalizeNotifyType(nextValue))
+            }
           }}
           aria-label={t('Notification Method')}
           variant='outline'

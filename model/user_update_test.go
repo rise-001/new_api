@@ -82,7 +82,9 @@ func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 		"request_count": gorm.Expr("request_count + ?", 1),
 	}).Error)
 
-	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+	setting := dto.DefaultUserSetting()
+	setting.Language = "zh"
+	require.NoError(t, UpdateUserSetting(user.Id, setting))
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
@@ -90,6 +92,19 @@ func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 	assert.Equal(t, 270, got.UsedQuota)
 	assert.Equal(t, 4, got.RequestCount)
 	assert.Equal(t, "zh", got.GetSetting().Language)
+}
+
+func TestUserSettingDefaultsIPLoggingAndPreservesOptOut(t *testing.T) {
+	legacyUser := User{Setting: `{}`}
+	assert.True(t, legacyUser.GetSetting().RecordIpLog)
+
+	setting := dto.DefaultUserSetting()
+	setting.RecordIpLog = false
+	optedOutUser := User{}
+	optedOutUser.SetSetting(setting)
+
+	assert.Contains(t, optedOutUser.Setting, `"record_ip_log":false`)
+	assert.False(t, optedOutUser.GetSetting().RecordIpLog)
 }
 
 func TestEnsureEmailAvailableRejectsExistingEmailCaseInsensitive(t *testing.T) {
