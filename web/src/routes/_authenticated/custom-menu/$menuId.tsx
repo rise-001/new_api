@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/* oxlint-disable react/iframe-missing-sandbox -- Embedded admin-configured apps require scripts and origin-scoped storage. */
 import { LinkSquare01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link, createFileRoute } from '@tanstack/react-router'
@@ -72,7 +73,7 @@ function CustomMenuEmbedPage() {
       referrerPolicy='strict-origin-when-cross-origin'
       className='h-full w-full border-0'
       allow='clipboard-read; clipboard-write; fullscreen'
-      sandbox='allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-scripts'
+      sandbox='allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts'
     />
   )
 }
