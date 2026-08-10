@@ -21,7 +21,7 @@ import (
 const (
 	consumptionExportBatchSize       = 1000
 	consumptionExportMaxRecords      = 50000
-	consumptionExportMaxRangeSeconds = int64(366 * 24 * time.Hour / time.Second)
+	consumptionExportMaxRangeSeconds = int64(31 * 24 * time.Hour / time.Second)
 	consumptionExportFileTTL         = time.Hour
 	consumptionExportCleanupInterval = time.Minute
 )
@@ -44,7 +44,7 @@ func (payload ConsumptionExportPayload) Validate() error {
 		return errors.New("end time must be later than start time")
 	}
 	if payload.EndTimestamp-payload.StartTimestamp > consumptionExportMaxRangeSeconds {
-		return errors.New("export time range cannot exceed 366 days")
+		return errors.New("export time range cannot exceed 31 days")
 	}
 	if payload.TokenID < 0 {
 		return errors.New("token id is invalid")

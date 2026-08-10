@@ -1781,7 +1781,7 @@
     "Export files remain available for one hour and are then removed automatically.": "Les fichiers restent disponibles une heure, puis sont supprimés automatiquement.",
     "Export task created": "Tâche d'exportation créée",
     "Export task deleted": "Tâche d'exportation supprimée",
-    "Export time range cannot exceed 366 days": "La période d'exportation ne peut pas dépasser 366 jours",
+    "Export time range cannot exceed 31 days": "La période d'exportation ne peut pas dépasser 31 jours",
     "Expose ratio API": "Exposer l'API de ratio",
     "Exposes the pricing/models catalog in the top navigation.": "Expose le catalogue des prix/modèles dans la navigation supérieure.",
     "Expression": "Expression",

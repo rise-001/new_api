@@ -22,7 +22,6 @@ func TestConsumptionExportPayloadValidateRejectsInvalidRanges(t *testing.T) {
 	}{
 		{name: "missing start", payload: ConsumptionExportPayload{EndTimestamp: 20}},
 		{name: "reversed range", payload: ConsumptionExportPayload{StartTimestamp: 20, EndTimestamp: 10}},
-		{name: "range exceeds one year", payload: ConsumptionExportPayload{StartTimestamp: 1, EndTimestamp: 1 + consumptionExportMaxRangeSeconds + 1}},
 		{name: "invalid token", payload: ConsumptionExportPayload{StartTimestamp: 1, EndTimestamp: 10, TokenID: -1}},
 		{name: "invalid timezone", payload: ConsumptionExportPayload{StartTimestamp: 1, EndTimestamp: 10, TimezoneOffset: 721}},
 	}
@@ -32,6 +31,22 @@ func TestConsumptionExportPayloadValidateRejectsInvalidRanges(t *testing.T) {
 			require.Error(t, test.payload.Validate())
 		})
 	}
+}
+
+func TestConsumptionExportPayloadValidateEnforces31DayRange(t *testing.T) {
+	const maxRangeSeconds = int64(31 * 24 * 60 * 60)
+
+	withinLimit := ConsumptionExportPayload{
+		StartTimestamp: 1,
+		EndTimestamp:   1 + maxRangeSeconds,
+	}
+	require.NoError(t, withinLimit.Validate())
+
+	exceedsLimit := ConsumptionExportPayload{
+		StartTimestamp: 1,
+		EndTimestamp:   1 + maxRangeSeconds + 1,
+	}
+	require.EqualError(t, exceedsLimit.Validate(), "export time range cannot exceed 31 days")
 }
 
 func TestBuildConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(t *testing.T) {

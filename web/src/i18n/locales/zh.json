@@ -1781,7 +1781,7 @@
     "Export files remain available for one hour and are then removed automatically.": "导出文件有效期为 1 小时，过期后将自动清理。",
     "Export task created": "导出任务已创建",
     "Export task deleted": "导出任务已删除",
-    "Export time range cannot exceed 366 days": "导出时间范围不能超过 366 天",
+    "Export time range cannot exceed 31 days": "导出时间范围不能超过 31 天",
     "Expose ratio API": "暴露倍率接口",
     "Exposes the pricing/models catalog in the top navigation.": "在顶部导航中显示定价/模型目录。",
     "Expression": "表达式",

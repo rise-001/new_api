@@ -1781,7 +1781,7 @@
     "Export files remain available for one hour and are then removed automatically.": "Файлы доступны один час, после чего удаляются автоматически.",
     "Export task created": "Задача экспорта создана",
     "Export task deleted": "Задача экспорта удалена",
-    "Export time range cannot exceed 366 days": "Период экспорта не может превышать 366 дней",
+    "Export time range cannot exceed 31 days": "Период экспорта не может превышать 31 день",
     "Expose ratio API": "Интерфейс экспонирования коэффициента",
     "Exposes the pricing/models catalog in the top navigation.": "Отображает каталог цен/моделей в верхней навигации.",
     "Expression": "Выражение",

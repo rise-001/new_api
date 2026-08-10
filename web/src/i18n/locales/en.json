@@ -1781,7 +1781,7 @@
     "Export files remain available for one hour and are then removed automatically.": "Export files remain available for one hour and are then removed automatically.",
     "Export task created": "Export task created",
     "Export task deleted": "Export task deleted",
-    "Export time range cannot exceed 366 days": "Export time range cannot exceed 366 days",
+    "Export time range cannot exceed 31 days": "Export time range cannot exceed 31 days",
     "Expose ratio API": "Expose ratio API",
     "Exposes the pricing/models catalog in the top navigation.": "Exposes the pricing/models catalog in the top navigation.",
     "Expression": "Expression",

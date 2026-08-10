@@ -1781,7 +1781,7 @@
     "Export files remain available for one hour and are then removed automatically.": "Tệp xuất có hiệu lực trong một giờ rồi được tự động xóa.",
     "Export task created": "Đã tạo tác vụ xuất",
     "Export task deleted": "Đã xóa tác vụ xuất",
-    "Export time range cannot exceed 366 days": "Khoảng thời gian xuất không được vượt quá 366 ngày",
+    "Export time range cannot exceed 31 days": "Khoảng thời gian xuất không được vượt quá 31 ngày",
     "Expose ratio API": "Cung cấp API tỷ lệ",
     "Exposes the pricing/models catalog in the top navigation.": "Hiển thị danh mục giá/mô hình trên thanh điều hướng đầu trang.",
     "Expression": "Biểu thức",

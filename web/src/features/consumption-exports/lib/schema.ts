@@ -35,12 +35,12 @@ export const consumptionExportFormSchema = z
       })
       return
     }
-    const maxRange = 366 * 24 * 60 * 60 * 1000
+    const maxRange = 31 * 24 * 60 * 60 * 1000
     if (value.endTime.getTime() - value.startTime.getTime() > maxRange) {
       context.addIssue({
         code: 'custom',
         path: ['endTime'],
-        message: 'Export time range cannot exceed 366 days',
+        message: 'Export time range cannot exceed 31 days',
       })
     }
   })

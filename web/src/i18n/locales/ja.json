@@ -1781,7 +1781,7 @@
     "Export files remain available for one hour and are then removed automatically.": "エクスポートファイルは 1 時間後に自動削除されます。",
     "Export task created": "エクスポートタスクを作成しました",
     "Export task deleted": "エクスポートタスクを削除しました",
-    "Export time range cannot exceed 366 days": "エクスポート期間は 366 日以内にしてください",
+    "Export time range cannot exceed 31 days": "エクスポート期間は 31 日以内にしてください",
     "Expose ratio API": "倍率APIを公開",
     "Exposes the pricing/models catalog in the top navigation.": "価格/モデルカタログをトップナビゲーションに表示します。",
     "Expression": "式",
