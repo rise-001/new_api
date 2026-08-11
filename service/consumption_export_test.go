@@ -3,6 +3,7 @@ package service
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/xml"
 	"io"
 	"os"
@@ -135,7 +136,62 @@ func TestWriteWorksheetXMLRejectsUnexpectedStreamingRowCount(t *testing.T) {
 	require.EqualError(t, err, `worksheet "消费清单" wrote 1 rows, expected 2`)
 }
 
-func TestStreamingConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(t *testing.T) {
+func TestBuildTokenSummarySheetAggregatesTokensCountsAndAmounts(t *testing.T) {
+	sheet := buildTokenSummarySheet(map[string]*consumptionTokenStats{
+		"": {
+			PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12, CacheReadTokens: 3,
+			ConsumeCount: 1, ConsumeAmount: 0.5,
+		},
+		"api-default": {
+			TokenName: "api-default", PromptTokens: 100, CompletionTokens: 25, TotalTokens: 125,
+			CacheReadTokens: 20, CacheWriteTokens: 5, ConsumeCount: 2, ConsumeAmount: 5.5,
+			RefundCount: 1, RefundAmount: 0.25,
+		},
+	})
+
+	var worksheet bytes.Buffer
+	require.NoError(t, writeWorksheetXML(&worksheet, sheet))
+	content := worksheet.String()
+	assert.Contains(t, content, `dimension ref="A1:K4"`)
+	assert.Contains(t, content, "未命名令牌")
+	assert.Contains(t, content, "api-default")
+	assert.Contains(t, content, `<c r="B4" s="4"><v>3</v></c>`)
+	assert.Contains(t, content, `<c r="C4" s="4"><v>1</v></c>`)
+	assert.Contains(t, content, `<c r="F4" s="4"><v>137</v></c>`)
+	assert.Contains(t, content, `<c r="K3" s="3"><v>5.25</v></c>`)
+	assert.Contains(t, content, `<c r="K4" s="5"><v>5.75</v></c>`)
+}
+
+func TestConsumptionExportDownloadSheetsIncludesTokenSummaryForEveryLayout(t *testing.T) {
+	tokenStats := map[string]*consumptionTokenStats{
+		"令牌汇总": {TokenName: "令牌汇总", ConsumeCount: 1},
+	}
+	tests := []struct {
+		name     string
+		payload  ConsumptionExportPayload
+		expected []string
+	}{
+		{name: "detail", expected: []string{"令牌汇总", "消费清单", "模型统计"}},
+		{name: "token sheets", payload: ConsumptionExportPayload{GroupByToken: true}, expected: []string{"令牌汇总", "令牌汇总-2", "模型统计"}},
+		{name: "daily summary", payload: ConsumptionExportPayload{DailySummary: true}, expected: []string{"令牌汇总", "每日汇总", "模型统计"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sheets := consumptionExportDownloadSheets(
+				context.Background(), test.payload, model.ConsumptionExportLogQuery{}, 0,
+				tokenStats, map[string]*consumptionExportStats{}, map[string]*consumptionDailyStats{}, time.UTC,
+			)
+			names := make([]string, 0, len(sheets))
+			for _, sheet := range sheets {
+				names = append(names, sheet.Name)
+			}
+			assert.Equal(t, test.expected, names)
+		})
+	}
+}
+
+func TestStreamingConsumptionExportWorkbookIncludesTokenDetailsAndModelSummaries(t *testing.T) {
 	records := []consumptionExportRecord{
 		{
 			Sequence: 1, UserID: 7, Username: "demo", CreatedAt: "2026-08-09 12:00:00", ModelName: "gpt-5",
@@ -150,6 +206,13 @@ func TestStreamingConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(
 	modelStats := map[string]*consumptionExportStats{
 		"gpt-5": {ModelName: "gpt-5", ConsumeCount: 1, ConsumeAmount: 0.001, RefundCount: 1, RefundAmount: 0.0002},
 	}
+	tokenStats := map[string]*consumptionTokenStats{
+		"default": {
+			TokenName: "default", PromptTokens: 100, CompletionTokens: 25, TotalTokens: 125,
+			CacheReadTokens: 10, CacheWriteTokens: 5, ConsumeCount: 1, ConsumeAmount: 0.001,
+			RefundCount: 1, RefundAmount: 0.0002,
+		},
+	}
 
 	detailSheet := buildStreamingConsumptionDetailSheet("消费清单", int64(len(records)), func(write func(consumptionExportRecord) error) error {
 		for _, record := range records {
@@ -159,7 +222,7 @@ func TestStreamingConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(
 		}
 		return nil
 	})
-	workbook, err := buildXLSX([]xlsxSheet{detailSheet, buildModelSummarySheet(modelStats)})
+	workbook, err := buildXLSX([]xlsxSheet{buildTokenSummarySheet(tokenStats), detailSheet, buildModelSummarySheet(modelStats)})
 	require.NoError(t, err)
 	require.NotEmpty(t, workbook)
 
@@ -185,13 +248,17 @@ func TestStreamingConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(
 		}
 	}
 
+	assert.Contains(t, files["xl/workbook.xml"], `name="令牌汇总"`)
 	assert.Contains(t, files["xl/workbook.xml"], `name="消费清单"`)
 	assert.Contains(t, files["xl/workbook.xml"], `name="模型统计"`)
-	assert.Contains(t, files["xl/worksheets/sheet1.xml"], "输入Token")
-	assert.Contains(t, files["xl/worksheets/sheet1.xml"], "gpt-5")
-	assert.Contains(t, files["xl/worksheets/sheet1.xml"], "合计")
-	assert.Contains(t, files["xl/worksheets/sheet2.xml"], "退款记录数")
-	assert.Contains(t, files["xl/worksheets/sheet2.xml"], "0.0008")
+	assert.Contains(t, files["xl/worksheets/sheet1.xml"], "令牌名称")
+	assert.Contains(t, files["xl/worksheets/sheet1.xml"], "default")
+	assert.Contains(t, files["xl/worksheets/sheet1.xml"], "0.0008")
+	assert.Contains(t, files["xl/worksheets/sheet2.xml"], "输入Token")
+	assert.Contains(t, files["xl/worksheets/sheet2.xml"], "gpt-5")
+	assert.Contains(t, files["xl/worksheets/sheet2.xml"], "合计")
+	assert.Contains(t, files["xl/worksheets/sheet3.xml"], "退款记录数")
+	assert.Contains(t, files["xl/worksheets/sheet3.xml"], "0.0008")
 }
 
 func TestConsumptionRecordFromRefundLogUsesNegativeNetAmountsAndDetailedTokens(t *testing.T) {

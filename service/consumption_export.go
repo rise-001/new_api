@@ -104,6 +104,19 @@ type consumptionExportStats struct {
 	RefundAmount  float64
 }
 
+type consumptionTokenStats struct {
+	TokenName        string
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	ConsumeCount     int64
+	ConsumeAmount    float64
+	RefundCount      int64
+	RefundAmount     float64
+}
+
 type consumptionDailyStats struct {
 	Date             string
 	ModelName        string
@@ -184,8 +197,8 @@ func GenerateConsumptionExport(ctx context.Context, userID int, payload Consumpt
 
 	location := time.FixedZone("export", -payload.TimezoneOffset*60)
 	modelStats := make(map[string]*consumptionExportStats)
+	tokenStats := make(map[string]*consumptionTokenStats)
 	dailyStats := make(map[string]*consumptionDailyStats)
-	tokenCounts := make(map[string]int64)
 	recordCount := int64(0)
 	err = forEachConsumptionExportLog(ctx, query, func(log *model.Log) error {
 		recordCount++
@@ -193,7 +206,24 @@ func GenerateConsumptionExport(ctx context.Context, userID int, payload Consumpt
 			return fmt.Errorf("export contains more than %d records; narrow the time range", consumptionExportMaxRecords)
 		}
 		record := consumptionRecordFromLog(log, recordCount, location)
-		tokenCounts[record.TokenName]++
+		token := tokenStats[record.TokenName]
+		if token == nil {
+			token = &consumptionTokenStats{TokenName: record.TokenName}
+			tokenStats[record.TokenName] = token
+		}
+		token.PromptTokens += record.PromptTokens
+		token.CompletionTokens += record.CompletionTokens
+		token.TotalTokens += record.TotalTokens
+		token.CacheReadTokens += record.CacheReadTokens
+		token.CacheWriteTokens += record.CacheWriteTokens
+		if log.Type == model.LogTypeRefund {
+			token.RefundCount++
+			token.RefundAmount += -record.Amount
+		} else {
+			token.ConsumeCount++
+			token.ConsumeAmount += record.Amount
+		}
+
 		stats := modelStats[record.ModelName]
 		if stats == nil {
 			stats = &consumptionExportStats{ModelName: record.ModelName}
@@ -230,7 +260,7 @@ func GenerateConsumptionExport(ctx context.Context, userID int, payload Consumpt
 		return nil, err
 	}
 
-	sheets := consumptionExportDownloadSheets(ctx, payload, query, recordCount, tokenCounts, modelStats, dailyStats, location)
+	sheets := consumptionExportDownloadSheets(ctx, payload, query, recordCount, tokenStats, modelStats, dailyStats, location)
 	if err := writeXLSX(temporaryFile, sheets); err != nil {
 		return nil, err
 	}
@@ -320,20 +350,21 @@ func consumptionRecordFromLog(log *model.Log, sequence int64, location *time.Loc
 	}
 }
 
-func consumptionExportDownloadSheets(ctx context.Context, payload ConsumptionExportPayload, query model.ConsumptionExportLogQuery, recordCount int64, tokenCounts map[string]int64, modelStats map[string]*consumptionExportStats, dailyStats map[string]*consumptionDailyStats, location *time.Location) []xlsxSheet {
+func consumptionExportDownloadSheets(ctx context.Context, payload ConsumptionExportPayload, query model.ConsumptionExportLogQuery, recordCount int64, tokenStats map[string]*consumptionTokenStats, modelStats map[string]*consumptionExportStats, dailyStats map[string]*consumptionDailyStats, location *time.Location) []xlsxSheet {
+	tokenSummarySheet := buildTokenSummarySheet(tokenStats)
 	if payload.DailySummary {
-		return []xlsxSheet{buildDailySummarySheet(dailyStats), buildModelSummarySheet(modelStats)}
+		return []xlsxSheet{tokenSummarySheet, buildDailySummarySheet(dailyStats), buildModelSummarySheet(modelStats)}
 	}
 
-	sheets := make([]xlsxSheet, 0)
+	sheets := []xlsxSheet{tokenSummarySheet}
 	sequence := int64(0)
 	if payload.GroupByToken {
-		tokenNames := make([]string, 0, len(tokenCounts))
-		for tokenName := range tokenCounts {
+		tokenNames := make([]string, 0, len(tokenStats))
+		for tokenName := range tokenStats {
 			tokenNames = append(tokenNames, tokenName)
 		}
 		sort.Strings(tokenNames)
-		usedSheetNames := make(map[string]int)
+		usedSheetNames := map[string]int{"令牌汇总": 1, "模型统计": 1}
 		for _, tokenName := range tokenNames {
 			tokenNameFilter := tokenName
 			displayName := tokenName
@@ -344,7 +375,7 @@ func consumptionExportDownloadSheets(ctx context.Context, payload ConsumptionExp
 			sheetQuery.TokenName = &tokenNameFilter
 			sheets = append(sheets, buildStreamingConsumptionDetailSheet(
 				uniqueSheetName(displayName, usedSheetNames),
-				tokenCounts[tokenName],
+				tokenStats[tokenName].ConsumeCount+tokenStats[tokenName].RefundCount,
 				func(write func(consumptionExportRecord) error) error {
 					return writeConsumptionExportRecords(ctx, sheetQuery, location, &sequence, write)
 				},
@@ -364,6 +395,53 @@ func consumptionExportDownloadSheets(ctx context.Context, payload ConsumptionExp
 	}
 	sheets = append(sheets, buildModelSummarySheet(modelStats))
 	return sheets
+}
+
+func buildTokenSummarySheet(statsByToken map[string]*consumptionTokenStats) xlsxSheet {
+	columns := []xlsxColumn{
+		{Header: "令牌名称", Width: 24}, {Header: "消费笔数", Width: 12}, {Header: "退款笔数", Width: 12},
+		{Header: "输入Token", Width: 13}, {Header: "输出Token", Width: 13}, {Header: "总Token", Width: 13},
+		{Header: "缓存读Token", Width: 14}, {Header: "缓存写Token", Width: 14}, {Header: "消费金额($)", Width: 15},
+		{Header: "退款金额($)", Width: 15}, {Header: "净消费金额($)", Width: 15},
+	}
+	tokenNames := make([]string, 0, len(statsByToken))
+	for name := range statsByToken {
+		tokenNames = append(tokenNames, name)
+	}
+	sort.Strings(tokenNames)
+	rows := make([][]xlsxCell, 0, len(tokenNames)+1)
+	var promptTokens, completionTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64
+	var consumeCount, refundCount int64
+	var consumeAmount, refundAmount float64
+	for _, name := range tokenNames {
+		stats := statsByToken[name]
+		displayName := stats.TokenName
+		if displayName == "" {
+			displayName = "未命名令牌"
+		}
+		rows = append(rows, []xlsxCell{
+			textCell(displayName), integerCell(stats.ConsumeCount), integerCell(stats.RefundCount),
+			integerCell(stats.PromptTokens), integerCell(stats.CompletionTokens), integerCell(stats.TotalTokens),
+			integerCell(stats.CacheReadTokens), integerCell(stats.CacheWriteTokens), amountCell(stats.ConsumeAmount),
+			amountCell(stats.RefundAmount), amountCell(stats.ConsumeAmount - stats.RefundAmount),
+		})
+		promptTokens += stats.PromptTokens
+		completionTokens += stats.CompletionTokens
+		totalTokens += stats.TotalTokens
+		cacheReadTokens += stats.CacheReadTokens
+		cacheWriteTokens += stats.CacheWriteTokens
+		consumeCount += stats.ConsumeCount
+		refundCount += stats.RefundCount
+		consumeAmount += stats.ConsumeAmount
+		refundAmount += stats.RefundAmount
+	}
+	rows = append(rows, []xlsxCell{
+		totalTextCell("合计"), totalIntegerCell(consumeCount), totalIntegerCell(refundCount),
+		totalIntegerCell(promptTokens), totalIntegerCell(completionTokens), totalIntegerCell(totalTokens),
+		totalIntegerCell(cacheReadTokens), totalIntegerCell(cacheWriteTokens), totalAmountCell(consumeAmount),
+		totalAmountCell(refundAmount), totalAmountCell(consumeAmount - refundAmount),
+	})
+	return xlsxSheet{Name: "令牌汇总", Columns: columns, Rows: rows}
 }
 
 func consumptionDetailColumns() []xlsxColumn {

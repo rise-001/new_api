@@ -80,7 +80,6 @@ export function CreateExportDialog(props: CreateExportDialogProps) {
     resolver: zodResolver(consumptionExportFormSchema),
     defaultValues: defaultFormValues(),
   })
-  const dailySummary = form.watch('dailySummary')
 
   const tokensQuery = useQuery({
     queryKey: ['api-keys', 'consumption-export-options'],
@@ -287,17 +286,16 @@ export function CreateExportDialog(props: CreateExportDialogProps) {
                   control={form.control}
                   name='groupByToken'
                   render={({ field }) => (
-                    <Field
-                      orientation='horizontal'
-                      data-disabled={dailySummary}
-                    >
+                    <Field orientation='horizontal'>
                       <Checkbox
                         id='group-by-token'
                         checked={field.value}
-                        disabled={dailySummary}
-                        onCheckedChange={(checked) =>
+                        onCheckedChange={(checked) => {
                           field.onChange(checked === true)
-                        }
+                          if (checked === true) {
+                            form.setValue('dailySummary', false)
+                          }
+                        }}
                       />
                       <FieldContent>
                         <FieldLabel
