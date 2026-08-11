@@ -353,6 +353,7 @@
     "Amount the user pays to purchase this plan (USD).": "Số tiền người dùng trả để mua gói này (USD).",
     "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "Số tiền người dùng trả để mua gói này; loại tiền tệ thực tế tùy thuộc vào cổng thanh toán.",
     "Amount to pay:": "Amount due:",
+    "An export is already being generated": "Một bản xuất đang được tạo",
     "An export task is already running": "Một tác vụ xuất đang chạy",
     "An unexpected error occurred": "Đã xảy ra lỗi không mong muốn",
     "An unknown error occurred": "Đã xảy ra lỗi không xác định",

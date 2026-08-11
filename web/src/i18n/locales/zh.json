@@ -353,6 +353,7 @@
     "Amount the user pays to purchase this plan (USD).": "用户购买该套餐需支付的金额（美元）。",
     "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "用户购买该套餐需支付的金额，具体币种由支付渠道决定",
     "Amount to pay:": "待支付金额：",
+    "An export is already being generated": "已有消费清单正在生成",
     "An export task is already running": "已有导出任务正在运行",
     "An unexpected error occurred": "发生意外错误",
     "An unknown error occurred": "发生未知错误",

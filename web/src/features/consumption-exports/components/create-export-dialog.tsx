@@ -355,7 +355,7 @@ export function CreateExportDialog(props: CreateExportDialogProps) {
             disabled={props.pending}
           >
             {props.pending && <Spinner data-icon='inline-start' />}
-            {t('Create task')}
+            {t('Download')}
           </Button>
         </DialogFooter>
       </DialogContent>

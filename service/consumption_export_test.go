@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +50,92 @@ func TestConsumptionExportPayloadValidateEnforces31DayRange(t *testing.T) {
 	require.EqualError(t, exceedsLimit.Validate(), "export time range cannot exceed 31 days")
 }
 
-func TestBuildConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(t *testing.T) {
+func TestConsumptionExportDownloadCloseRemovesTemporaryFile(t *testing.T) {
+	temporaryFile, err := os.CreateTemp(t.TempDir(), "consumption-*.xlsx")
+	require.NoError(t, err)
+	userID := 42
+	activeConsumptionExports.Store(userID, struct{}{})
+	download := &ConsumptionExportDownload{File: temporaryFile, userID: userID}
+
+	require.NoError(t, download.Close())
+	_, err = os.Stat(temporaryFile.Name())
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, active := activeConsumptionExports.Load(userID)
+	assert.False(t, active)
+	require.NoError(t, download.Close())
+}
+
+func TestDeleteExpiredConsumptionExportTempFilesOnlyRemovesStaleExports(t *testing.T) {
+	directory := t.TempDir()
+	stale, err := os.CreateTemp(directory, "new-api-consumption-*.xlsx")
+	require.NoError(t, err)
+	require.NoError(t, stale.Close())
+	recent, err := os.CreateTemp(directory, "new-api-consumption-*.xlsx")
+	require.NoError(t, err)
+	require.NoError(t, recent.Close())
+	unrelated, err := os.CreateTemp(directory, "other-*.xlsx")
+	require.NoError(t, err)
+	require.NoError(t, unrelated.Close())
+
+	now := time.Now()
+	require.NoError(t, os.Chtimes(stale.Name(), now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
+	deleted, err := deleteExpiredConsumptionExportTempFiles(directory, now.Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+	_, err = os.Stat(stale.Name())
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(recent.Name())
+	require.NoError(t, err)
+	_, err = os.Stat(unrelated.Name())
+	require.NoError(t, err)
+}
+
+func TestBuildStreamingConsumptionDetailSheetWritesRowsAndTotals(t *testing.T) {
+	records := []consumptionExportRecord{
+		{Sequence: 1, UserID: 7, ModelName: "gpt-5", PromptTokens: 100, CompletionTokens: 25, TotalTokens: 125, Quota: 500, Amount: 0.001},
+		{Sequence: 2, UserID: 7, ModelName: "gpt-5", PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25, Quota: -100, Amount: -0.0002},
+	}
+	sheet := buildStreamingConsumptionDetailSheet("消费清单", int64(len(records)), func(write func(consumptionExportRecord) error) error {
+		for _, record := range records {
+			if err := write(record); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	var worksheet bytes.Buffer
+	require.NoError(t, writeWorksheetXML(&worksheet, sheet))
+	decoder := xml.NewDecoder(bytes.NewReader(worksheet.Bytes()))
+	for {
+		_, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+	}
+	content := worksheet.String()
+	assert.Contains(t, content, `dimension ref="A1:R4"`)
+	assert.Contains(t, content, "gpt-5")
+	assert.Contains(t, content, "合计")
+	assert.Contains(t, content, "0.0008")
+}
+
+func TestWriteWorksheetXMLRejectsUnexpectedStreamingRowCount(t *testing.T) {
+	sheet := xlsxSheet{
+		Name:     "消费清单",
+		Columns:  []xlsxColumn{{Header: "序号", Width: 8}},
+		RowCount: 2,
+		WriteRows: func(write func([]xlsxCell) error) error {
+			return write([]xlsxCell{integerCell(1)})
+		},
+	}
+
+	err := writeWorksheetXML(io.Discard, sheet)
+	require.EqualError(t, err, `worksheet "消费清单" wrote 1 rows, expected 2`)
+}
+
+func TestStreamingConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(t *testing.T) {
 	records := []consumptionExportRecord{
 		{
 			Sequence: 1, UserID: 7, Username: "demo", CreatedAt: "2026-08-09 12:00:00", ModelName: "gpt-5",
@@ -65,7 +151,15 @@ func TestBuildConsumptionExportWorkbookIncludesDetailsTotalsAndModelSummary(t *t
 		"gpt-5": {ModelName: "gpt-5", ConsumeCount: 1, ConsumeAmount: 0.001, RefundCount: 1, RefundAmount: 0.0002},
 	}
 
-	workbook, err := buildConsumptionExportWorkbook(ConsumptionExportPayload{}, records, modelStats, nil)
+	detailSheet := buildStreamingConsumptionDetailSheet("消费清单", int64(len(records)), func(write func(consumptionExportRecord) error) error {
+		for _, record := range records {
+			if err := write(record); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	workbook, err := buildXLSX([]xlsxSheet{detailSheet, buildModelSummarySheet(modelStats)})
 	require.NoError(t, err)
 	require.NotEmpty(t, workbook)
 

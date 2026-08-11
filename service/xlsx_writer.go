@@ -2,9 +2,11 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -22,9 +24,11 @@ type xlsxColumn struct {
 }
 
 type xlsxSheet struct {
-	Name    string
-	Columns []xlsxColumn
-	Rows    [][]xlsxCell
+	Name      string
+	Columns   []xlsxColumn
+	Rows      [][]xlsxCell
+	RowCount  int
+	WriteRows func(func([]xlsxCell) error) error
 }
 
 func textCell(value string) xlsxCell {
@@ -54,12 +58,19 @@ func totalAmountCell(value float64) xlsxCell {
 }
 
 func buildXLSX(sheets []xlsxSheet) ([]byte, error) {
+	var output bytes.Buffer
+	if err := writeXLSX(&output, sheets); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+func writeXLSX(output io.Writer, sheets []xlsxSheet) error {
 	if len(sheets) == 0 {
-		return nil, fmt.Errorf("at least one worksheet is required")
+		return fmt.Errorf("at least one worksheet is required")
 	}
 
-	var output bytes.Buffer
-	writer := zip.NewWriter(&output)
+	writer := zip.NewWriter(output)
 	files := map[string]string{
 		"[Content_Types].xml":        contentTypesXML(len(sheets)),
 		"_rels/.rels":                packageRelationshipsXML,
@@ -73,11 +84,11 @@ func buildXLSX(sheets []xlsxSheet) ([]byte, error) {
 		file, err := writer.Create(path)
 		if err != nil {
 			_ = writer.Close()
-			return nil, err
+			return err
 		}
 		if _, err := file.Write([]byte(content)); err != nil {
 			_ = writer.Close()
-			return nil, err
+			return err
 		}
 	}
 
@@ -85,92 +96,132 @@ func buildXLSX(sheets []xlsxSheet) ([]byte, error) {
 		file, err := writer.Create(fmt.Sprintf("xl/worksheets/sheet%d.xml", index+1))
 		if err != nil {
 			_ = writer.Close()
-			return nil, err
+			return err
 		}
 		if err := writeWorksheetXML(file, sheet); err != nil {
 			_ = writer.Close()
-			return nil, err
+			return err
 		}
 	}
 
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
+	return writer.Close()
 }
 
-func writeWorksheetXML(writer interface{ Write([]byte) (int, error) }, sheet xlsxSheet) error {
-	var content strings.Builder
-	content.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
-	content.WriteString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
+func writeWorksheetXML(writer io.Writer, sheet xlsxSheet) error {
+	buffer := bufio.NewWriter(writer)
+	content := &xlsxXMLWriter{writer: buffer}
+	content.writeString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	content.writeString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
 	lastColumn := columnName(len(sheet.Columns))
-	lastRow := len(sheet.Rows) + 1
-	content.WriteString(`<dimension ref="A1:`)
-	content.WriteString(lastColumn)
-	content.WriteString(strconv.Itoa(lastRow))
-	content.WriteString(`"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`)
-	content.WriteString(`<cols>`)
-	for index, column := range sheet.Columns {
-		content.WriteString(`<col min="`)
-		content.WriteString(strconv.Itoa(index + 1))
-		content.WriteString(`" max="`)
-		content.WriteString(strconv.Itoa(index + 1))
-		content.WriteString(`" width="`)
-		content.WriteString(strconv.FormatFloat(column.Width, 'f', 1, 64))
-		content.WriteString(`" customWidth="1"/>`)
+	rowCount := len(sheet.Rows)
+	if sheet.WriteRows != nil {
+		rowCount = sheet.RowCount
 	}
-	content.WriteString(`</cols><sheetData>`)
+	lastRow := rowCount + 1
+	content.writeString(`<dimension ref="A1:`)
+	content.writeString(lastColumn)
+	content.writeString(strconv.Itoa(lastRow))
+	content.writeString(`"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`)
+	content.writeString(`<cols>`)
+	for index, column := range sheet.Columns {
+		content.writeString(`<col min="`)
+		content.writeString(strconv.Itoa(index + 1))
+		content.writeString(`" max="`)
+		content.writeString(strconv.Itoa(index + 1))
+		content.writeString(`" width="`)
+		content.writeString(strconv.FormatFloat(column.Width, 'f', 1, 64))
+		content.writeString(`" customWidth="1"/>`)
+	}
+	content.writeString(`</cols><sheetData>`)
 
-	content.WriteString(`<row r="1">`)
+	content.writeString(`<row r="1">`)
 	for index, column := range sheet.Columns {
-		appendStringCell(&content, columnName(index+1)+"1", column.Header, 1)
+		appendStringCell(content, columnName(index+1)+"1", column.Header, 1)
 	}
-	content.WriteString(`</row>`)
-	for rowIndex, row := range sheet.Rows {
+	content.writeString(`</row>`)
+	rowIndex := 0
+	writeRow := func(row []xlsxCell) error {
 		excelRow := rowIndex + 2
-		content.WriteString(`<row r="`)
-		content.WriteString(strconv.Itoa(excelRow))
-		content.WriteString(`">`)
+		content.writeString(`<row r="`)
+		content.writeString(strconv.Itoa(excelRow))
+		content.writeString(`">`)
 		for columnIndex, cell := range row {
 			if columnIndex >= len(sheet.Columns) {
 				break
 			}
 			reference := columnName(columnIndex+1) + strconv.Itoa(excelRow)
 			if cell.Number != nil {
-				appendNumberCell(&content, reference, *cell.Number, cell.Style)
+				appendNumberCell(content, reference, *cell.Number, cell.Style)
 				continue
 			}
-			appendStringCell(&content, reference, cell.Text, cell.Style)
+			appendStringCell(content, reference, cell.Text, cell.Style)
 		}
-		content.WriteString(`</row>`)
+		content.writeString(`</row>`)
+		rowIndex++
+		return content.err
 	}
-	content.WriteString(`</sheetData>`)
+	if sheet.WriteRows != nil {
+		if err := sheet.WriteRows(writeRow); err != nil {
+			return err
+		}
+	} else {
+		for _, row := range sheet.Rows {
+			if err := writeRow(row); err != nil {
+				return err
+			}
+		}
+	}
+	if rowIndex != rowCount {
+		return fmt.Errorf("worksheet %q wrote %d rows, expected %d", sheet.Name, rowIndex, rowCount)
+	}
+	content.writeString(`</sheetData>`)
 	if len(sheet.Columns) > 0 {
-		content.WriteString(`<autoFilter ref="A1:`)
-		content.WriteString(lastColumn)
-		content.WriteString(strconv.Itoa(lastRow))
-		content.WriteString(`"/>`)
+		content.writeString(`<autoFilter ref="A1:`)
+		content.writeString(lastColumn)
+		content.writeString(strconv.Itoa(lastRow))
+		content.writeString(`"/>`)
 	}
-	content.WriteString(`</worksheet>`)
-	_, err := writer.Write([]byte(content.String()))
-	return err
+	content.writeString(`</worksheet>`)
+	if content.err != nil {
+		return content.err
+	}
+	return buffer.Flush()
 }
 
-func appendStringCell(builder *strings.Builder, reference string, value string, style int) {
-	value = sanitizeXLSXText(value)
-	builder.WriteString(`<c r="`)
-	builder.WriteString(reference)
-	builder.WriteString(`" t="inlineStr"`)
-	if style > 0 {
-		builder.WriteString(` s="`)
-		builder.WriteString(strconv.Itoa(style))
-		builder.WriteString(`"`)
+type xlsxXMLWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (writer *xlsxXMLWriter) writeString(value string) {
+	if writer.err != nil {
+		return
 	}
-	builder.WriteString(`><is><t xml:space="preserve">`)
+	_, writer.err = io.WriteString(writer.writer, value)
+}
+
+func (writer *xlsxXMLWriter) writeBytes(value []byte) {
+	if writer.err != nil {
+		return
+	}
+	_, writer.err = writer.writer.Write(value)
+}
+
+func appendStringCell(writer *xlsxXMLWriter, reference string, value string, style int) {
+	value = sanitizeXLSXText(value)
+	writer.writeString(`<c r="`)
+	writer.writeString(reference)
+	writer.writeString(`" t="inlineStr"`)
+	if style > 0 {
+		writer.writeString(` s="`)
+		writer.writeString(strconv.Itoa(style))
+		writer.writeString(`"`)
+	}
+	writer.writeString(`><is><t xml:space="preserve">`)
 	var escaped bytes.Buffer
 	_ = xml.EscapeText(&escaped, []byte(value))
-	builder.Write(escaped.Bytes())
-	builder.WriteString(`</t></is></c>`)
+	writer.writeBytes(escaped.Bytes())
+	writer.writeString(`</t></is></c>`)
 }
 
 func sanitizeXLSXText(value string) string {
@@ -187,18 +238,18 @@ func sanitizeXLSXText(value string) string {
 	return value
 }
 
-func appendNumberCell(builder *strings.Builder, reference string, value float64, style int) {
-	builder.WriteString(`<c r="`)
-	builder.WriteString(reference)
-	builder.WriteString(`"`)
+func appendNumberCell(writer *xlsxXMLWriter, reference string, value float64, style int) {
+	writer.writeString(`<c r="`)
+	writer.writeString(reference)
+	writer.writeString(`"`)
 	if style > 0 {
-		builder.WriteString(` s="`)
-		builder.WriteString(strconv.Itoa(style))
-		builder.WriteString(`"`)
+		writer.writeString(` s="`)
+		writer.writeString(strconv.Itoa(style))
+		writer.writeString(`"`)
 	}
-	builder.WriteString(`><v>`)
-	builder.WriteString(strconv.FormatFloat(value, 'f', -1, 64))
-	builder.WriteString(`</v></c>`)
+	writer.writeString(`><v>`)
+	writer.writeString(strconv.FormatFloat(value, 'f', -1, 64))
+	writer.writeString(`</v></c>`)
 }
 
 func columnName(index int) string {

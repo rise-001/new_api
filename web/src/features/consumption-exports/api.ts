@@ -16,58 +16,39 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { isAxiosError } from 'axios'
+
 import { api } from '@/lib/api'
 
+import { parseConsumptionExportDownload } from './lib/download'
 import type {
-  ApiResponse,
-  ConsumptionExportPage,
-  ConsumptionExportStatusFilter,
+  ConsumptionExportDownload,
   CreateConsumptionExportInput,
 } from './types'
 
-export async function listConsumptionExports(params: {
-  page: number
-  pageSize: number
-  status: ConsumptionExportStatusFilter
-}): Promise<ApiResponse<ConsumptionExportPage>> {
-  const query = new URLSearchParams({
-    p: String(params.page),
-    size: String(params.pageSize),
-  })
-  if (params.status !== 'all') query.set('status', params.status)
-  const response = await api.get(`/api/consumption-export/?${query}`)
-  return response.data
-}
-
 export async function createConsumptionExport(
   input: CreateConsumptionExportInput
-): Promise<ApiResponse<{ task_id: string; status: string; created: boolean }>> {
-  const response = await api.post('/api/consumption-export/', input)
-  return response.data
-}
-
-export async function cancelConsumptionExport(
-  taskId: string
-): Promise<ApiResponse<null>> {
-  const response = await api.post(
-    `/api/consumption-export/${encodeURIComponent(taskId)}/cancel`
-  )
-  return response.data
-}
-
-export async function deleteConsumptionExport(
-  taskId: string
-): Promise<ApiResponse<null>> {
-  const response = await api.delete(
-    `/api/consumption-export/${encodeURIComponent(taskId)}`
-  )
-  return response.data
-}
-
-export async function downloadConsumptionExport(taskId: string): Promise<Blob> {
-  const response = await api.get(
-    `/api/consumption-export/${encodeURIComponent(taskId)}/download`,
-    { responseType: 'blob', disableDuplicate: true }
-  )
-  return response.data as Blob
+): Promise<ConsumptionExportDownload> {
+  try {
+    const response = await api.post('/api/consumption-export/', input, {
+      responseType: 'blob',
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
+    return parseConsumptionExportDownload(
+      response.data as Blob,
+      String(response.headers['content-type'] ?? ''),
+      response.headers['content-disposition']
+    )
+  } catch (error) {
+    if (isAxiosError(error)) {
+      const blob = error.response?.data
+      const contentType = String(error.response?.headers['content-type'] ?? '')
+      if (blob instanceof Blob && contentType.includes('application/json')) {
+        return parseConsumptionExportDownload(blob, contentType)
+      }
+      throw new Error('Download failed')
+    }
+    throw error
+  }
 }

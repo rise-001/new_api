@@ -74,49 +74,6 @@ func TestSystemTaskCreateAndActiveLifecycle(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestUserSystemTasksAllowOneActiveExportPerUser(t *testing.T) {
-	truncateTables(t)
-
-	first, err := CreateUserSystemTask(SystemTaskTypeConsumptionExport, 101, map[string]int{"token_id": 1}, nil)
-	require.NoError(t, err)
-	second, err := CreateUserSystemTask(SystemTaskTypeConsumptionExport, 202, map[string]int{"token_id": 2}, nil)
-	require.NoError(t, err)
-
-	require.NotNil(t, first.ActiveKey)
-	require.NotNil(t, second.ActiveKey)
-	assert.Equal(t, "consumption_export:101", *first.ActiveKey)
-	assert.Equal(t, "consumption_export:202", *second.ActiveKey)
-
-	_, err = CreateUserSystemTask(SystemTaskTypeConsumptionExport, 101, nil, nil)
-	require.Error(t, err)
-
-	active, err := GetActiveUserSystemTask(SystemTaskTypeConsumptionExport, 202)
-	require.NoError(t, err)
-	require.NotNil(t, active)
-	assert.Equal(t, second.TaskID, active.TaskID)
-}
-
-func TestCancelUserSystemTaskOnlyCancelsOwnedActiveTask(t *testing.T) {
-	truncateTables(t)
-
-	task, err := CreateUserSystemTask(SystemTaskTypeConsumptionExport, 101, nil, nil)
-	require.NoError(t, err)
-
-	canceled, err := CancelUserSystemTask(task.TaskID, 202, SystemTaskTypeConsumptionExport)
-	require.NoError(t, err)
-	assert.False(t, canceled)
-
-	canceled, err = CancelUserSystemTask(task.TaskID, 101, SystemTaskTypeConsumptionExport)
-	require.NoError(t, err)
-	assert.True(t, canceled)
-
-	stored, err := GetSystemTaskByTaskID(task.TaskID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, SystemTaskStatusCanceled, stored.Status)
-	assert.Nil(t, stored.ActiveKey)
-}
-
 func TestSystemTaskActiveKeyPreventsDuplicateActiveRun(t *testing.T) {
 	truncateTables(t)
 

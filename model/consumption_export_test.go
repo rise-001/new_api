@@ -1,40 +1,47 @@
 package model
 
 import (
-	"context"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestConsumptionExportFileHonorsOwnerAndExpiration(t *testing.T) {
-	taskID, err := GenerateSystemTaskID()
-	require.NoError(t, err)
-	now := common.GetTimestamp()
-	file := &ConsumptionExportFile{
-		TaskID: taskID, UserID: 101, FileName: "consumption.xlsx", Content: []byte("workbook"), ExpiresAt: now + 60,
+func TestRemoveLegacyConsumptionExportStorageDropsFilesAndTaskRows(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Exec("CREATE TABLE consumption_export_files (id INTEGER PRIMARY KEY)").Error)
+
+	legacyActiveKey := "consumption_export:101"
+	legacyTask := &SystemTask{
+		TaskID:    "legacy_consumption_export",
+		Type:      "consumption_export",
+		Status:    SystemTaskStatusRunning,
+		ActiveKey: &legacyActiveKey,
+		LockedBy:  "legacy-runner",
 	}
-	require.NoError(t, SaveConsumptionExportFile(file))
-	t.Cleanup(func() {
-		_ = DB.Where("task_id = ?", taskID).Delete(&ConsumptionExportFile{}).Error
-	})
+	require.NoError(t, DB.Create(legacyTask).Error)
+	require.NoError(t, DB.Create(&SystemTaskLock{
+		Type:        "consumption_export",
+		TaskID:      legacyTask.TaskID,
+		LockedBy:    legacyTask.LockedBy,
+		LockedUntil: 100,
+	}).Error)
+	require.NoError(t, DB.Create(&SystemTask{
+		TaskID: "retained_task",
+		Type:   SystemTaskTypeLogCleanup,
+		Status: SystemTaskStatusSucceeded,
+	}).Error)
 
-	owned, err := GetConsumptionExportFile(taskID, 101, now)
-	require.NoError(t, err)
-	require.NotNil(t, owned)
-	assert.Equal(t, []byte("workbook"), owned.Content)
+	require.NoError(t, removeLegacyConsumptionExportStorage())
+	assert.False(t, DB.Migrator().HasTable("consumption_export_files"))
 
-	notOwned, err := GetConsumptionExportFile(taskID, 202, now)
-	require.NoError(t, err)
-	assert.Nil(t, notOwned)
-
-	expired, err := GetConsumptionExportFile(taskID, 101, now+60)
-	require.NoError(t, err)
-	assert.Nil(t, expired)
-
-	deleted, err := DeleteExpiredConsumptionExportFiles(context.Background(), now+60)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, deleted, int64(1))
+	var legacyTaskCount int64
+	require.NoError(t, DB.Model(&SystemTask{}).Where("type = ?", "consumption_export").Count(&legacyTaskCount).Error)
+	assert.Zero(t, legacyTaskCount)
+	var legacyLockCount int64
+	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("type = ?", "consumption_export").Count(&legacyLockCount).Error)
+	assert.Zero(t, legacyLockCount)
+	var retainedTaskCount int64
+	require.NoError(t, DB.Model(&SystemTask{}).Where("task_id = ?", "retained_task").Count(&retainedTaskCount).Error)
+	assert.Equal(t, int64(1), retainedTaskCount)
 }

@@ -300,7 +300,6 @@ func migrateDB() error {
 		&SystemInstance{},
 		&SystemTask{},
 		&SystemTaskLock{},
-		&ConsumptionExportFile{},
 		&CasbinRule{},
 		&AuthzRole{},
 	)
@@ -322,7 +321,7 @@ func migrateDB() error {
 			return err
 		}
 	}
-	return nil
+	return removeLegacyConsumptionExportStorage()
 }
 
 func migrateDBFast() error {
@@ -364,7 +363,6 @@ func migrateDBFast() error {
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
-		{&ConsumptionExportFile{}, "ConsumptionExportFile"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -403,6 +401,9 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := removeLegacyConsumptionExportStorage(); err != nil {
+		return err
 	}
 	common.SysLog("database migrated")
 	return nil

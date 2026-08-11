@@ -280,11 +280,7 @@ func SetApiRouter(router *gin.Engine) {
 		consumptionExportRoute := apiRouter.Group("/consumption-export")
 		consumptionExportRoute.Use(middleware.UserAuth())
 		{
-			consumptionExportRoute.GET("/", controller.ListConsumptionExports)
 			consumptionExportRoute.POST("/", middleware.CriticalRateLimit(), controller.CreateConsumptionExport)
-			consumptionExportRoute.GET("/:task_id/download", controller.DownloadConsumptionExport)
-			consumptionExportRoute.POST("/:task_id/cancel", middleware.CriticalRateLimit(), controller.CancelConsumptionExport)
-			consumptionExportRoute.DELETE("/:task_id", controller.DeleteConsumptionExport)
 		}
 
 		systemTaskRoute := apiRouter.Group("/system-task")

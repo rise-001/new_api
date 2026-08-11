@@ -52,7 +52,6 @@ const STATUS_VARIANT: Record<SystemTaskStatus, 'secondary' | 'destructive'> = {
   running: 'secondary',
   succeeded: 'secondary',
   failed: 'destructive',
-  canceled: 'secondary',
 }
 
 const STATUS_CLASS_NAME: Record<SystemTaskStatus, string> = {
@@ -63,7 +62,6 @@ const STATUS_CLASS_NAME: Record<SystemTaskStatus, string> = {
   succeeded:
     'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
   failed: '',
-  canceled: '',
 }
 
 const STATUS_DOT_CLASS_NAME: Record<SystemTaskStatus, string> = {
@@ -71,7 +69,6 @@ const STATUS_DOT_CLASS_NAME: Record<SystemTaskStatus, string> = {
   running: 'bg-sky-500',
   succeeded: 'bg-emerald-500',
   failed: 'bg-destructive',
-  canceled: 'bg-muted-foreground',
 }
 
 const PROGRESS_BAR_CLASS_NAME: Record<SystemTaskStatus, string> = {
@@ -79,7 +76,6 @@ const PROGRESS_BAR_CLASS_NAME: Record<SystemTaskStatus, string> = {
   running: '[&_[data-slot=progress-indicator]]:bg-sky-500',
   succeeded: '[&_[data-slot=progress-indicator]]:bg-emerald-500',
   failed: '[&_[data-slot=progress-indicator]]:bg-destructive',
-  canceled: '[&_[data-slot=progress-indicator]]:bg-muted-foreground',
 }
 
 const STATUS_LABEL: Record<SystemTaskStatus, string> = {
@@ -87,7 +83,6 @@ const STATUS_LABEL: Record<SystemTaskStatus, string> = {
   running: 'running',
   succeeded: 'succeeded',
   failed: 'failed',
-  canceled: 'Cancelled',
 }
 
 // Maps backend system task type constants to i18n source keys. Unknown/future
@@ -98,7 +93,6 @@ const TYPE_LABEL: Record<string, string> = {
   model_update: 'Batch upstream model update',
   midjourney_poll: 'Drawing task polling',
   async_task_poll: 'Async task polling',
-  consumption_export: 'Consumption exports',
 }
 
 const TYPE_DISPLAY_ID: Record<string, string> = {

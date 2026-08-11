@@ -175,26 +175,26 @@ cd /opt/new-api && docker pull ghcr.io/rise-001/new-api-custom:latest && docker 
 
 ## 2026-08-09：个人消费清单导出
 
-提交：`9811970a feat: add personal consumption exports`
+初始提交：`9811970a feat: add personal consumption exports`
 
-固定版本镜像：`ghcr.io/rise-001/new-api-custom:sha-9811970`
+初始异步版本镜像（已被当前实现替代）：`ghcr.io/rise-001/new-api-custom:sha-9811970`
 
 ### 功能说明
 
-在个人板块增加“消费清单”入口，用户可以按时间范围和 API Key 筛选自己的消费记录，并异步导出 Excel 文件。
+在个人板块增加“消费清单”入口，用户可以按时间范围和 API Key 筛选自己的消费记录，并直接下载生成的 Excel 文件。
 
 - 导出内容包含请求时间、API Key、模型、输入 Token、输出 Token、消费金额等消费明细
 - Excel 按 API Key 分工作表，并附带每日汇总、退款、总计和模型统计
-- 创建导出任务后，前端在任务处于等待或运行状态时每 10 秒刷新一次进度
-- 支持查看历史任务、取消任务、删除任务和下载已完成文件
-- 只能查看、操作和下载当前用户自己的导出任务
-- 单次导出时间范围最长 366 天，最多导出 50,000 条消费记录
-- 导出文件有效期为 1 小时，过期后无法下载；后台每分钟清理一次过期文件
+- 单次导出时间范围最长 31 天，最多导出 300,000 条消费记录
+- 后端分页读取消费日志并流式写入工作表，避免一次性在内存中保存全部明细
+- Excel 先写入系统临时文件，HTTP 响应完成后立即关闭并删除，不上传 S3/MinIO，也不写入数据库
+- 同一进程内每个用户同时只能生成一个导出，接口继续使用用户认证和关键操作限流
+- 启动后每分钟清理超过 24 小时的同名前缀遗留临时文件，用于处理进程异常退出场景
 
 ### 实现结构
 
 - `web/src/features/consumption-exports/`
-  - 消费清单页面、创建导出对话框、任务列表、接口调用和数据类型
+  - 消费清单页面、创建导出对话框、Blob 响应解析和浏览器下载逻辑
 - `web/src/routes/_authenticated/profile/index.tsx`
   - 增加 `/profile?view=consumption` 个人消费清单视图
 - `web/src/hooks/use-sidebar-data.ts`
@@ -202,51 +202,52 @@ cd /opt/new-api && docker pull ghcr.io/rise-001/new-api-custom:latest && docker 
 - `web/src/features/profile/components/sidebar-modules-card.tsx`
   - 支持在个人侧边栏模块设置中控制消费清单入口
 - `controller/consumption_export.go`
-  - 导出任务的创建、查询、取消、删除和下载接口
+  - 同步生成导出文件并通过附件响应返回，响应结束后删除临时文件
 - `service/consumption_export.go`
-  - 消费记录查询、异步任务执行、进度更新、文件过期和清理逻辑
+  - 范围与数量校验、临时文件生命周期、消费统计和遗留临时文件清理
 - `service/xlsx_writer.go`
-  - Excel 明细、汇总和统计工作表生成
+  - 将工作表 XML 流式写入 XLSX ZIP，支持大批量明细
 - `model/consumption_export.go`
-  - 导出文件存储、读取和清理的数据访问逻辑
+  - 消费日志计数、游标分页查询和旧异步导出数据清理
 - `model/system_task.go`
-  - 扩展系统任务以支持用户归属、消费导出任务和取消状态
+  - 已移除旧异步导出专用的用户任务、取消状态和 `user_id` 模型字段
 - `web/src/i18n/locales/*.json`
   - 已同步英文、简体中文、繁体中文、法语、日语、俄语和越南语文案
 
 ### API
 
-- `GET /api/consumption-export/`：查询当前用户的导出任务
-- `POST /api/consumption-export/`：创建导出任务
-- `GET /api/consumption-export/:task_id/download`：下载有效期内的导出文件
-- `POST /api/consumption-export/:task_id/cancel`：取消等待中或运行中的任务
-- `DELETE /api/consumption-export/:task_id`：删除任务及其导出文件
+- `POST /api/consumption-export/`：生成并直接返回当前用户的 Excel 导出文件
 
-以上接口均要求用户登录，并在后端校验任务归属。
+旧版任务列表、下载、取消和删除接口均已移除。
 
 ### 数据库影响
 
-应用启动后通过现有 GORM 自动迁移执行以下结构变更，兼容 SQLite、MySQL 和 PostgreSQL：
+当前导出实现不会新增数据库表或字段，也不会把 Excel 内容写入数据库。应用启动迁移时会清理旧异步版本遗留内容：
 
-- 在 `system_tasks` 表增加可空且带索引的 `user_id` 字段，用于标识用户级系统任务
-- 新增 `consumption_export_files` 表，使用数据库原生二进制字段保存 Excel 内容和过期时间
+- 删除 `system_task_locks` 中类型为 `consumption_export` 的旧锁记录
+- 删除 `system_tasks` 中类型为 `consumption_export` 的旧任务记录
+- 执行 `DROP TABLE IF EXISTS consumption_export_files`
 
-迁移不会重写或删除现有用户、消费日志和系统任务记录。过期导出文件会从表中删除，但 SQLite、MySQL 或 PostgreSQL 的物理数据库文件不一定立即缩小。导出文件保存在主数据库是为了保证多实例部署时任意实例都能下载，因此部署前应备份数据库，并关注导出高峰期的数据库空间占用。
+清理语句兼容 SQLite、MySQL 和 PostgreSQL，不会删除其他类型的系统任务，也不会修改用户和消费日志。未部署过初始异步版本的环境中，旧任务和旧文件表均不存在，因此清理操作为空操作。旧版本曾加入的 `system_tasks.user_id` 已从 GORM 模型移除，新数据库不会创建该字段；已经运行过旧异步版本的数据库可能继续保留这个未使用的物理列，本次不执行跨数据库删列。
+
+### 部署注意
+
+- 临时目录必须可写，并需要预留单个大体量 XLSX 的磁盘空间
+- 30 万条导出可能耗时较长，反向代理和网关的请求超时应覆盖文件生成时间
+- 多实例环境应同步替换所有旧实例，避免旧实例继续访问已删除的文件表
 
 ### 测试与验证
 
 已验证：
 
-- 消费导出 model 测试通过
-- Excel 生成和消费导出 service 测试通过
-- 后端全包编译检查通过
 - 前端 TypeScript 类型检查通过
+- Blob 下载响应单元测试通过
 - 涉及文件 lint 和格式检查通过
 - 7 个前端语言文件同步检查无缺失、无多余键和未翻译项
 - Rsbuild 生产构建检查通过
 - `git diff --check` 通过
 
-全量 `go test ./service` 仍存在仓库原有的 channel-affinity usage-cache 计数器隔离测试失败，与本次消费导出功能无关。完整版权检查仍会报告 `web/src/features/channels/lib/channel-field-update.ts` 的既有空行格式问题，本次未修改该文件。
+当前本地终端的 PATH 中没有 Go 和 Bun；前端检查使用仓库现有二进制和 Node 执行，未能运行 Go 格式化、后端编译及回归测试。
 
 ## 2026-08-10：默认开启 IP 记录
 
@@ -276,3 +277,119 @@ cd /opt/new-api && docker pull ghcr.io/rise-001/new-api-custom:latest && docker 
 
 - 已通过 `git diff --check`
 - 当前本地终端的 PATH 中没有 Go 和 Bun，未能执行后端回归测试和前端 lint
+
+## 2026-08-10：隐藏普通用户日志中的模型映射
+
+提交：`32506343 fix: hide model mapping from user logs`
+
+### 功能说明
+
+- 普通用户查询自己的日志时，不再返回 `Other` 中的 `is_model_mapped` 和 `upstream_model_name`
+- 管理员查询日志的原始数据不受影响，仍可用于排查模型映射和上游路由问题
+- `model_price` 等非管理员专属的计费字段继续保留
+
+### 实现位置
+
+- `model/log.go`
+  - 在现有 `formatUserLogs` 用户日志格式化流程中移除模型映射字段
+- `model/log_format_test.go`
+  - 覆盖模型映射字段被移除、普通计费字段仍保留的回归场景
+
+### 影响范围与升级注意
+
+本次不需要数据库迁移，也不改变日志入库内容，只调整普通用户日志接口的返回结果。同步上游时需要重点检查 `formatUserLogs` 及日志脱敏字段列表，避免合并后重新暴露模型映射信息。
+
+## 2026-08-10：自定义菜单管理
+
+提交：`ba808740 feat: add custom menu management`
+
+### 功能说明
+
+- 在系统设置中增加“自定义菜单管理”页面，仅管理员可以维护菜单配置
+- 菜单可以显示在聊天区域侧边栏或公共顶部导航栏
+- 聊天区域菜单支持站内嵌入或新标签页打开；顶部导航菜单只能在新标签页打开
+- 菜单名称直接使用管理员填写的文本，不作为固定 i18n 文案翻译
+- 单次最多配置 50 个菜单项，后端校验 ID、名称、URL、显示位置和打开方式
+
+### 配置
+
+配置保存在系统选项 `CustomMenuItems` 中，值为 JSON 数组：
+
+```json
+[
+  {
+    "id": "support",
+    "url": "https://support.example.com",
+    "name": "Support",
+    "location": "chat",
+    "open_mode": "embed"
+  }
+]
+```
+
+支持的字段值：
+
+- `location`：`chat` 或 `top`
+- `open_mode`：`embed` 或 `new_tab`
+- `top` 位置只接受 `new_tab`
+
+### 实现结构
+
+- `setting/custom_menu.go`
+  - 定义配置结构、数量限制和后端 URL/字段校验
+- `model/option.go`
+  - 初始化 `CustomMenuItems`，并在更新系统选项时执行校验
+- `controller/misc.go`
+  - 将菜单配置加入 `/api/status` 响应，供公共顶部导航和登录后侧边栏读取
+- `web/src/features/system-settings/custom-menus/`
+  - 自定义菜单列表、编辑对话框、删除确认和保存逻辑
+- `web/src/lib/custom-menus.ts`
+  - 前端配置解析、序列化和安全 URL 检查
+- `web/src/hooks/use-custom-menus.ts`
+  - 从系统状态中读取菜单配置
+- `web/src/hooks/use-sidebar-data.ts` 和 `web/src/hooks/use-top-nav-links.ts`
+  - 分别挂载聊天区域菜单和顶部导航菜单
+- `web/src/routes/_authenticated/custom-menu/$menuId.tsx`
+  - 渲染登录后的嵌入页面
+
+### 权限与安全边界
+
+菜单配置由管理员维护，但当前完整 `CustomMenuItems` 会通过公开的 `/api/status` 返回，因此菜单 URL 不能视为秘密。嵌入页面仍要求用户登录。后续如果需要配置仅登录用户可见的内部地址，应将聊天区域菜单改由登录后接口返回，而不是继续放在公共状态接口中。
+
+### 测试与升级注意
+
+- `setting/custom_menu_test.go` 覆盖 JSON、重复 ID、URL 协议、位置和打开方式校验
+- `web/src/lib/__tests__/custom-menus.test.ts` 覆盖前端解析和序列化
+- 已补齐 7 个前端语言文件中的固定管理界面文案
+- 同步上游时重点检查 `/api/status`、公共头部、侧边栏数据、系统设置导航、路由树和 7 个语言文件
+- `web/src/routeTree.gen.ts` 属于生成文件，解决路由冲突后应通过项目路由工具重新生成
+
+## 2026-08-10：允许嵌入菜单使用来源存储
+
+提交：`34d3ca6d fix: support stateful embedded custom menus`
+
+### 功能说明
+
+在自定义菜单 iframe 的 `sandbox` 中增加 `allow-same-origin`，使被嵌入应用能够以自身来源访问 Cookie、Local Storage 等来源存储，用于保持登录状态和应用配置。
+
+### 安全边界
+
+当前 iframe 同时允许 `allow-same-origin` 和 `allow-scripts`，并允许弹窗逃离 sandbox。该组合只适用于管理员明确信任的嵌入地址，不应嵌入用户可控或来源不明的页面。同步上游或继续扩展菜单功能时，不要在缺少域名限制和安全评估的情况下继续放宽 iframe 权限。
+
+本次只修改 `web/src/routes/_authenticated/custom-menu/$menuId.tsx`，不涉及后端接口或数据库迁移。
+
+## 2026-08-10：错误页反馈入口改动（待纠正）
+
+提交：`615bfe39 chore(web): remove issue feedback from error page`
+
+### 当前改动
+
+- 从通用错误页移除了持续出错时前往 GitHub Issues 反馈的提示
+- 移除了“Report an issue”按钮及其项目 Issues 链接
+- 保留“Go Back”和“Back to Home”操作
+
+### 项目规范冲突
+
+当前 `AGENTS.md` 明确保护所有与项目和作者组织相关的引用、归属和元数据，不允许删除或替换。该提交删除了错误页中受保护的项目 Issues 引用，因此不能作为后续更新需要保留的合法二开行为；在下一次合并或发布前必须恢复该项目引用，并确保上游更新不会再次删除其他受保护信息。
+
+本次只修改 `web/src/features/errors/general-error.tsx`，不涉及后端接口或数据库迁移。

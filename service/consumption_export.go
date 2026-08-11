@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -20,10 +22,10 @@ import (
 
 const (
 	consumptionExportBatchSize       = 1000
-	consumptionExportMaxRecords      = 50000
+	consumptionExportMaxRecords      = 300000
 	consumptionExportMaxRangeSeconds = int64(31 * 24 * time.Hour / time.Second)
-	consumptionExportFileTTL         = time.Hour
 	consumptionExportCleanupInterval = time.Minute
+	consumptionExportTempFileTTL     = 24 * time.Hour
 )
 
 type ConsumptionExportPayload struct {
@@ -55,32 +57,22 @@ func (payload ConsumptionExportPayload) Validate() error {
 	return nil
 }
 
-type ConsumptionExportState struct {
-	Total     int64  `json:"total"`
-	Processed int64  `json:"processed"`
-	Progress  int    `json:"progress"`
-	Stage     string `json:"stage"`
+type ConsumptionExportDownload struct {
+	File     *os.File
+	FileName string
+	userID   int
+	closeErr error
+	close    sync.Once
 }
 
-type ConsumptionExportResult struct {
-	RecordCount int64  `json:"record_count"`
-	FileName    string `json:"file_name"`
-	FileSize    int64  `json:"file_size"`
-	ExpiresAt   int64  `json:"expires_at"`
-	ModelCount  int    `json:"model_count"`
-}
-
-type ConsumptionExportTaskResponse struct {
-	ID        int64                    `json:"id"`
-	TaskID    string                   `json:"task_id"`
-	Status    model.SystemTaskStatus   `json:"status"`
-	Payload   ConsumptionExportPayload `json:"payload"`
-	State     ConsumptionExportState   `json:"state"`
-	Result    ConsumptionExportResult  `json:"result"`
-	Error     string                   `json:"error"`
-	Available bool                     `json:"available"`
-	CreatedAt int64                    `json:"created_at"`
-	UpdatedAt int64                    `json:"updated_at"`
+func (download *ConsumptionExportDownload) Close() error {
+	download.close.Do(func() {
+		defer activeConsumptionExports.Delete(download.userID)
+		closeErr := download.File.Close()
+		removeErr := os.Remove(download.File.Name())
+		download.closeErr = errors.Join(closeErr, removeErr)
+	})
+	return download.closeErr
 }
 
 type consumptionExportRecord struct {
@@ -124,6 +116,16 @@ type consumptionDailyStats struct {
 	RefundAmount     float64
 }
 
+type consumptionDetailTotals struct {
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	Quota            int64
+	Amount           float64
+}
+
 type consumptionLogOther struct {
 	CacheTokens         int64 `json:"cache_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens"`
@@ -133,263 +135,143 @@ type consumptionLogOther struct {
 	FirstResponseTimeMS int64 `json:"frt"`
 }
 
-type consumptionExportHandler struct{}
+var activeConsumptionExports sync.Map
 
-func (consumptionExportHandler) Type() string {
-	return model.SystemTaskTypeConsumptionExport
-}
-
-func (consumptionExportHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
-	runConsumptionExportTask(ctx, task, runnerID)
-}
-
-func init() {
-	RegisterSystemTaskHandler(consumptionExportHandler{})
-}
-
-func StartConsumptionExportTask(userID int, payload ConsumptionExportPayload) (*model.SystemTask, bool, error) {
+func GenerateConsumptionExport(ctx context.Context, userID int, payload ConsumptionExportPayload) (*ConsumptionExportDownload, error) {
 	if err := payload.Validate(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if payload.TokenID > 0 {
 		token, err := model.GetTokenByIds(payload.TokenID, userID)
 		if err != nil {
-			return nil, false, errors.New("selected token does not exist")
+			return nil, errors.New("selected token does not exist")
 		}
 		payload.TokenName = token.Name
 	}
-
-	activeTask, err := model.GetActiveUserSystemTask(model.SystemTaskTypeConsumptionExport, userID)
-	if err != nil {
-		return nil, false, err
-	}
-	if activeTask != nil {
-		return activeTask, false, nil
-	}
-
-	state := ConsumptionExportState{Stage: "pending"}
-	task, err := model.CreateUserSystemTask(model.SystemTaskTypeConsumptionExport, userID, payload, state)
-	if err != nil {
-		activeTask, activeErr := model.GetActiveUserSystemTask(model.SystemTaskTypeConsumptionExport, userID)
-		if activeErr == nil && activeTask != nil {
-			return activeTask, false, nil
-		}
-		return nil, false, err
-	}
-	notifySystemTaskRunner()
-	return task, true, nil
-}
-
-func ListConsumptionExportTasks(userID int, status model.SystemTaskStatus, offset int, limit int) ([]ConsumptionExportTaskResponse, int64, error) {
-	tasks, total, err := model.ListUserSystemTasks(userID, model.SystemTaskTypeConsumptionExport, status, offset, limit)
-	if err != nil {
-		return nil, 0, err
-	}
-	now := common.GetTimestamp()
-	responses := make([]ConsumptionExportTaskResponse, 0, len(tasks))
-	for _, task := range tasks {
-		response, err := buildConsumptionExportTaskResponse(task, now)
-		if err != nil {
-			return nil, 0, err
-		}
-		responses = append(responses, response)
-	}
-	return responses, total, nil
-}
-
-func CancelConsumptionExportTask(taskID string, userID int) (bool, error) {
-	canceled, err := model.CancelUserSystemTask(taskID, userID, model.SystemTaskTypeConsumptionExport)
-	if canceled {
-		notifySystemTaskRunner()
-	}
-	return canceled, err
-}
-
-func DeleteConsumptionExportTask(taskID string, userID int) (bool, error) {
-	return model.DeleteConsumptionExportTask(taskID, userID)
-}
-
-func GetConsumptionExportFile(taskID string, userID int) (*model.ConsumptionExportFile, error) {
-	return model.GetConsumptionExportFile(taskID, userID, common.GetTimestamp())
-}
-
-func buildConsumptionExportTaskResponse(task *model.SystemTask, now int64) (ConsumptionExportTaskResponse, error) {
-	response := ConsumptionExportTaskResponse{
-		ID:        task.ID,
-		TaskID:    task.TaskID,
-		Status:    task.Status,
-		Error:     task.Error,
-		CreatedAt: task.CreatedAt,
-		UpdatedAt: task.UpdatedAt,
-	}
-	if err := task.DecodePayload(&response.Payload); err != nil {
-		return response, err
-	}
-	if err := task.DecodeState(&response.State); err != nil {
-		return response, err
-	}
-	if task.Result != "" {
-		if err := common.UnmarshalJsonStr(task.Result, &response.Result); err != nil {
-			return response, err
-		}
-	}
-	response.Available = task.Status == model.SystemTaskStatusSucceeded && response.Result.ExpiresAt > now
-	return response, nil
-}
-
-func runConsumptionExportTask(ctx context.Context, task *model.SystemTask, runnerID string) {
-	payload := ConsumptionExportPayload{}
-	if err := task.DecodePayload(&payload); err != nil {
-		failSystemTask(task, runnerID, err)
-		return
-	}
-	if err := payload.Validate(); err != nil {
-		failSystemTask(task, runnerID, err)
-		return
-	}
 	if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
-		failSystemTask(task, runnerID, errors.New("quota per unit must be greater than zero"))
-		return
+		return nil, errors.New("quota per unit must be greater than zero")
 	}
+	if _, loaded := activeConsumptionExports.LoadOrStore(userID, struct{}{}); loaded {
+		return nil, errors.New("An export is already being generated")
+	}
+
+	temporaryFile, err := os.CreateTemp("", "new-api-consumption-*.xlsx")
+	if err != nil {
+		activeConsumptionExports.Delete(userID)
+		return nil, err
+	}
+	download := &ConsumptionExportDownload{File: temporaryFile, userID: userID}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_ = download.Close()
+		}
+	}()
 
 	query := model.ConsumptionExportLogQuery{
-		UserID:         task.UserID,
+		UserID:         userID,
 		StartTimestamp: payload.StartTimestamp,
 		EndTimestamp:   payload.EndTimestamp,
 		TokenID:        payload.TokenID,
 	}
 	total, err := model.CountConsumptionExportLogs(ctx, query)
 	if err != nil {
-		failSystemTask(task, runnerID, err)
-		return
+		return nil, err
 	}
 	if total > consumptionExportMaxRecords {
-		failSystemTask(task, runnerID, fmt.Errorf("export contains %d records; narrow the time range to at most %d records", total, consumptionExportMaxRecords))
-		return
-	}
-
-	state := ConsumptionExportState{Total: total, Stage: "querying"}
-	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
-		logSystemTaskLockError(ctx, task, err)
-		return
+		return nil, fmt.Errorf("export contains %d records; narrow the time range to at most %d records", total, consumptionExportMaxRecords)
 	}
 
 	location := time.FixedZone("export", -payload.TimezoneOffset*60)
-	records := make([]consumptionExportRecord, 0, total)
 	modelStats := make(map[string]*consumptionExportStats)
 	dailyStats := make(map[string]*consumptionDailyStats)
-	for offset := 0; int64(offset) < total; offset += consumptionExportBatchSize {
-		select {
-		case <-ctx.Done():
-			return
-		default:
+	tokenCounts := make(map[string]int64)
+	recordCount := int64(0)
+	err = forEachConsumptionExportLog(ctx, query, func(log *model.Log) error {
+		recordCount++
+		if recordCount > consumptionExportMaxRecords {
+			return fmt.Errorf("export contains more than %d records; narrow the time range", consumptionExportMaxRecords)
+		}
+		record := consumptionRecordFromLog(log, recordCount, location)
+		tokenCounts[record.TokenName]++
+		stats := modelStats[record.ModelName]
+		if stats == nil {
+			stats = &consumptionExportStats{ModelName: record.ModelName}
+			modelStats[record.ModelName] = stats
+		}
+		if log.Type == model.LogTypeRefund {
+			stats.RefundCount++
+			stats.RefundAmount += -record.Amount
+		} else {
+			stats.ConsumeCount++
+			stats.ConsumeAmount += record.Amount
 		}
 
-		logs, err := model.GetConsumptionExportLogs(ctx, query, offset, consumptionExportBatchSize)
+		date := time.Unix(log.CreatedAt, 0).In(location).Format("2006-01-02")
+		dailyKey := date + "\x00" + record.ModelName
+		daily := dailyStats[dailyKey]
+		if daily == nil {
+			daily = &consumptionDailyStats{Date: date, ModelName: record.ModelName}
+			dailyStats[dailyKey] = daily
+		}
+		daily.PromptTokens += record.PromptTokens
+		daily.CompletionTokens += record.CompletionTokens
+		daily.TotalTokens += record.TotalTokens
+		if log.Type == model.LogTypeRefund {
+			daily.RefundCount++
+			daily.RefundAmount += -record.Amount
+		} else {
+			daily.ConsumeCount++
+			daily.ConsumeAmount += record.Amount
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sheets := consumptionExportDownloadSheets(ctx, payload, query, recordCount, tokenCounts, modelStats, dailyStats, location)
+	if err := writeXLSX(temporaryFile, sheets); err != nil {
+		return nil, err
+	}
+	if _, err := temporaryFile.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	download.FileName = fmt.Sprintf("consumption-%s.xlsx", time.Now().In(location).Format("20060102-150405"))
+	succeeded = true
+	return download, nil
+}
+
+func forEachConsumptionExportLog(ctx context.Context, query model.ConsumptionExportLogQuery, visit func(*model.Log) error) error {
+	cursor := model.ConsumptionExportLogCursor{}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		logs, err := model.GetConsumptionExportLogsAfter(ctx, query, cursor, consumptionExportBatchSize)
 		if err != nil {
-			failSystemTask(task, runnerID, err)
-			return
+			return err
 		}
 		for _, log := range logs {
-			record := consumptionRecordFromLog(log, int64(len(records)+1), location)
-			records = append(records, record)
-			stats := modelStats[record.ModelName]
-			if stats == nil {
-				stats = &consumptionExportStats{ModelName: record.ModelName}
-				modelStats[record.ModelName] = stats
-			}
-			if log.Type == model.LogTypeRefund {
-				stats.RefundCount++
-				stats.RefundAmount += -record.Amount
-			} else {
-				stats.ConsumeCount++
-				stats.ConsumeAmount += record.Amount
-			}
-
-			date := time.Unix(log.CreatedAt, 0).In(location).Format("2006-01-02")
-			dailyKey := date + "\x00" + record.ModelName
-			daily := dailyStats[dailyKey]
-			if daily == nil {
-				daily = &consumptionDailyStats{Date: date, ModelName: record.ModelName}
-				dailyStats[dailyKey] = daily
-			}
-			daily.PromptTokens += record.PromptTokens
-			daily.CompletionTokens += record.CompletionTokens
-			daily.TotalTokens += record.TotalTokens
-			if log.Type == model.LogTypeRefund {
-				daily.RefundCount++
-				daily.RefundAmount += -record.Amount
-			} else {
-				daily.ConsumeCount++
-				daily.ConsumeAmount += record.Amount
+			if err := visit(log); err != nil {
+				return err
 			}
 		}
-
-		state.Processed += int64(len(logs))
-		if total > 0 {
-			state.Progress = int(state.Processed * 85 / total)
+		if len(logs) < consumptionExportBatchSize {
+			return nil
 		}
-		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
-			logSystemTaskLockError(ctx, task, err)
-			return
-		}
+		last := logs[len(logs)-1]
+		cursor.CreatedAt = last.CreatedAt
+		cursor.ID = last.Id
+		cursor.Offset += len(logs)
 	}
+}
 
-	state.Stage = "building"
-	state.Progress = 90
-	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
-		logSystemTaskLockError(ctx, task, err)
-		return
-	}
-	workbook, err := buildConsumptionExportWorkbook(payload, records, modelStats, dailyStats)
-	if err != nil {
-		failSystemTask(task, runnerID, err)
-		return
-	}
-	select {
-	case <-ctx.Done():
-		return
-	default:
-	}
-
-	state.Stage = "saving"
-	state.Progress = 95
-	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
-		logSystemTaskLockError(ctx, task, err)
-		return
-	}
-	completedAt := common.GetTimestamp()
-	fileName := fmt.Sprintf("consumption-%s.xlsx", time.Unix(completedAt, 0).In(location).Format("20060102-150405"))
-	result := ConsumptionExportResult{
-		RecordCount: total,
-		FileName:    fileName,
-		FileSize:    int64(len(workbook)),
-		ExpiresAt:   completedAt + int64(consumptionExportFileTTL.Seconds()),
-		ModelCount:  len(modelStats),
-	}
-	file := &model.ConsumptionExportFile{
-		TaskID:    task.TaskID,
-		UserID:    task.UserID,
-		FileName:  fileName,
-		Content:   workbook,
-		ExpiresAt: result.ExpiresAt,
-	}
-	if err := model.SaveConsumptionExportFile(file); err != nil {
-		failSystemTask(task, runnerID, err)
-		return
-	}
-
-	state.Stage = "completed"
-	state.Progress = 100
-	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
-		_ = model.DeleteConsumptionExportFile(task.TaskID, task.UserID)
-		logSystemTaskLockError(ctx, task, err)
-		return
-	}
-	if err := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, ""); err != nil {
-		_ = model.DeleteConsumptionExportFile(task.TaskID, task.UserID)
-		logSystemTaskLockError(ctx, task, err)
-	}
+func writeConsumptionExportRecords(ctx context.Context, query model.ConsumptionExportLogQuery, location *time.Location, sequence *int64, write func(consumptionExportRecord) error) error {
+	return forEachConsumptionExportLog(ctx, query, func(log *model.Log) error {
+		*sequence = *sequence + 1
+		return write(consumptionRecordFromLog(log, *sequence, location))
+	})
 }
 
 func consumptionRecordFromLog(log *model.Log, sequence int64, location *time.Location) consumptionExportRecord {
@@ -438,41 +320,54 @@ func consumptionRecordFromLog(log *model.Log, sequence int64, location *time.Loc
 	}
 }
 
-func buildConsumptionExportWorkbook(payload ConsumptionExportPayload, records []consumptionExportRecord, modelStats map[string]*consumptionExportStats, dailyStats map[string]*consumptionDailyStats) ([]byte, error) {
-	sheets := make([]xlsxSheet, 0)
+func consumptionExportDownloadSheets(ctx context.Context, payload ConsumptionExportPayload, query model.ConsumptionExportLogQuery, recordCount int64, tokenCounts map[string]int64, modelStats map[string]*consumptionExportStats, dailyStats map[string]*consumptionDailyStats, location *time.Location) []xlsxSheet {
 	if payload.DailySummary {
-		sheets = append(sheets, buildDailySummarySheet(dailyStats))
-	} else if payload.GroupByToken {
-		recordsByToken := make(map[string][]consumptionExportRecord)
-		for _, record := range records {
-			name := record.TokenName
-			if name == "" {
-				name = "未命名令牌"
-			}
-			recordsByToken[name] = append(recordsByToken[name], record)
-		}
-		tokenNames := make([]string, 0, len(recordsByToken))
-		for name := range recordsByToken {
-			tokenNames = append(tokenNames, name)
+		return []xlsxSheet{buildDailySummarySheet(dailyStats), buildModelSummarySheet(modelStats)}
+	}
+
+	sheets := make([]xlsxSheet, 0)
+	sequence := int64(0)
+	if payload.GroupByToken {
+		tokenNames := make([]string, 0, len(tokenCounts))
+		for tokenName := range tokenCounts {
+			tokenNames = append(tokenNames, tokenName)
 		}
 		sort.Strings(tokenNames)
 		usedSheetNames := make(map[string]int)
 		for _, tokenName := range tokenNames {
-			sheetName := uniqueSheetName(tokenName, usedSheetNames)
-			sheets = append(sheets, buildConsumptionDetailSheet(sheetName, recordsByToken[tokenName]))
+			tokenNameFilter := tokenName
+			displayName := tokenName
+			if displayName == "" {
+				displayName = "未命名令牌"
+			}
+			sheetQuery := query
+			sheetQuery.TokenName = &tokenNameFilter
+			sheets = append(sheets, buildStreamingConsumptionDetailSheet(
+				uniqueSheetName(displayName, usedSheetNames),
+				tokenCounts[tokenName],
+				func(write func(consumptionExportRecord) error) error {
+					return writeConsumptionExportRecords(ctx, sheetQuery, location, &sequence, write)
+				},
+			))
 		}
 		if len(tokenNames) == 0 {
-			sheets = append(sheets, buildConsumptionDetailSheet("消费清单", nil))
+			sheets = append(sheets, buildStreamingConsumptionDetailSheet("消费清单", 0, func(func(consumptionExportRecord) error) error { return nil }))
 		}
 	} else {
-		sheets = append(sheets, buildConsumptionDetailSheet("消费清单", records))
+		sheets = append(sheets, buildStreamingConsumptionDetailSheet(
+			"消费清单",
+			recordCount,
+			func(write func(consumptionExportRecord) error) error {
+				return writeConsumptionExportRecords(ctx, query, location, &sequence, write)
+			},
+		))
 	}
 	sheets = append(sheets, buildModelSummarySheet(modelStats))
-	return buildXLSX(sheets)
+	return sheets
 }
 
-func buildConsumptionDetailSheet(name string, records []consumptionExportRecord) xlsxSheet {
-	columns := []xlsxColumn{
+func consumptionDetailColumns() []xlsxColumn {
+	return []xlsxColumn{
 		{Header: "序号", Width: 8}, {Header: "用户ID", Width: 10}, {Header: "用户名", Width: 16},
 		{Header: "消费时间", Width: 20}, {Header: "模型名称", Width: 26}, {Header: "输入Token", Width: 13},
 		{Header: "输出Token", Width: 13}, {Header: "总Token", Width: 13}, {Header: "缓存读Token", Width: 14},
@@ -480,31 +375,61 @@ func buildConsumptionDetailSheet(name string, records []consumptionExportRecord)
 		{Header: "用时/首字", Width: 14}, {Header: "令牌名称", Width: 20}, {Header: "日志类型", Width: 12},
 		{Header: "分组", Width: 14}, {Header: "IP", Width: 16}, {Header: "日志详情", Width: 48},
 	}
-	rows := make([][]xlsxCell, 0, len(records)+1)
-	var totalPrompt, totalCompletion, totalTokens, totalCacheRead, totalCacheWrite, totalQuota int64
-	var totalAmount float64
-	for _, record := range records {
-		rows = append(rows, []xlsxCell{
-			integerCell(record.Sequence), integerCell(int64(record.UserID)), textCell(record.Username), textCell(record.CreatedAt),
-			textCell(record.ModelName), integerCell(record.PromptTokens), integerCell(record.CompletionTokens), integerCell(record.TotalTokens),
-			integerCell(record.CacheReadTokens), integerCell(record.CacheWriteTokens), integerCell(record.Quota), amountCell(record.Amount),
-			textCell(record.Duration), textCell(record.TokenName), textCell(record.LogType), textCell(record.Group), textCell(record.IP), textCell(record.Detail),
-		})
-		totalPrompt += record.PromptTokens
-		totalCompletion += record.CompletionTokens
-		totalTokens += record.TotalTokens
-		totalCacheRead += record.CacheReadTokens
-		totalCacheWrite += record.CacheWriteTokens
-		totalQuota += record.Quota
-		totalAmount += record.Amount
+}
+
+func consumptionDetailRow(record consumptionExportRecord) []xlsxCell {
+	return []xlsxCell{
+		integerCell(record.Sequence), integerCell(int64(record.UserID)), textCell(record.Username), textCell(record.CreatedAt),
+		textCell(record.ModelName), integerCell(record.PromptTokens), integerCell(record.CompletionTokens), integerCell(record.TotalTokens),
+		integerCell(record.CacheReadTokens), integerCell(record.CacheWriteTokens), integerCell(record.Quota), amountCell(record.Amount),
+		textCell(record.Duration), textCell(record.TokenName), textCell(record.LogType), textCell(record.Group), textCell(record.IP), textCell(record.Detail),
 	}
-	rows = append(rows, []xlsxCell{
+}
+
+func (totals *consumptionDetailTotals) Add(record consumptionExportRecord) {
+	totals.PromptTokens += record.PromptTokens
+	totals.CompletionTokens += record.CompletionTokens
+	totals.TotalTokens += record.TotalTokens
+	totals.CacheReadTokens += record.CacheReadTokens
+	totals.CacheWriteTokens += record.CacheWriteTokens
+	totals.Quota += record.Quota
+	totals.Amount += record.Amount
+}
+
+func (totals consumptionDetailTotals) Row() []xlsxCell {
+	return []xlsxCell{
 		totalTextCell("合计"), totalTextCell(""), totalTextCell(""), totalTextCell(""), totalTextCell(""),
-		totalIntegerCell(totalPrompt), totalIntegerCell(totalCompletion), totalIntegerCell(totalTokens), totalIntegerCell(totalCacheRead),
-		totalIntegerCell(totalCacheWrite), totalIntegerCell(totalQuota), totalAmountCell(totalAmount), totalTextCell(""), totalTextCell(""),
-		totalTextCell(""), totalTextCell(""), totalTextCell(""), totalTextCell(""),
-	})
-	return xlsxSheet{Name: name, Columns: columns, Rows: rows}
+		totalIntegerCell(totals.PromptTokens), totalIntegerCell(totals.CompletionTokens), totalIntegerCell(totals.TotalTokens),
+		totalIntegerCell(totals.CacheReadTokens), totalIntegerCell(totals.CacheWriteTokens), totalIntegerCell(totals.Quota),
+		totalAmountCell(totals.Amount), totalTextCell(""), totalTextCell(""), totalTextCell(""), totalTextCell(""),
+		totalTextCell(""), totalTextCell(""),
+	}
+}
+
+func buildStreamingConsumptionDetailSheet(name string, recordCount int64, writeRecords func(func(consumptionExportRecord) error) error) xlsxSheet {
+	return xlsxSheet{
+		Name:     name,
+		Columns:  consumptionDetailColumns(),
+		RowCount: int(recordCount) + 1,
+		WriteRows: func(writeRow func([]xlsxCell) error) error {
+			totals := consumptionDetailTotals{}
+			written := int64(0)
+			if err := writeRecords(func(record consumptionExportRecord) error {
+				if written >= recordCount {
+					return fmt.Errorf("consumption export changed while being generated: expected %d records, found at least %d; retry", recordCount, written+1)
+				}
+				written++
+				totals.Add(record)
+				return writeRow(consumptionDetailRow(record))
+			}); err != nil {
+				return err
+			}
+			if written != recordCount {
+				return fmt.Errorf("consumption export changed while being generated: expected %d records, found %d; retry", recordCount, written)
+			}
+			return writeRow(totals.Row())
+		},
+	}
 }
 
 func buildModelSummarySheet(statsByModel map[string]*consumptionExportStats) xlsxSheet {
@@ -612,17 +537,42 @@ func uniqueSheetName(name string, used map[string]int) string {
 	return name
 }
 
-var consumptionExportCleanupOnce sync.Once
+var consumptionExportTempCleanupOnce sync.Once
 
-func StartConsumptionExportCleanup() {
-	consumptionExportCleanupOnce.Do(func() {
-		if !common.IsMasterNode {
-			return
+func deleteExpiredConsumptionExportTempFiles(directory string, cutoff time.Time) (int, error) {
+	paths, err := filepath.Glob(filepath.Join(directory, "new-api-consumption-*.xlsx"))
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return deleted, err
 		}
+		if info.IsDir() || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func StartConsumptionExportTempCleanup() {
+	consumptionExportTempCleanupOnce.Do(func() {
 		gopool.Go(func() {
 			cleanup := func() {
-				if _, err := model.DeleteExpiredConsumptionExportFiles(context.Background(), common.GetTimestamp()); err != nil {
-					logger.LogWarn(context.Background(), fmt.Sprintf("consumption export cleanup failed: %v", err))
+				if _, err := deleteExpiredConsumptionExportTempFiles(os.TempDir(), time.Now().Add(-consumptionExportTempFileTTL)); err != nil {
+					logger.LogWarn(context.Background(), fmt.Sprintf("temporary consumption export cleanup failed: %v", err))
 				}
 			}
 			cleanup()

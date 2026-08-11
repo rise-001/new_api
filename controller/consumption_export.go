@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -34,78 +36,25 @@ func CreateConsumptionExport(c *gin.Context) {
 		DailySummary:   request.DailySummary,
 		TimezoneOffset: request.TimezoneOffset,
 	}
-	task, created, err := service.StartConsumptionExportTask(c.GetInt("id"), payload)
+	download, err := service.GenerateConsumptionExport(c.Request.Context(), c.GetInt("id"), payload)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data": gin.H{
-			"task_id": task.TaskID,
-			"status":  task.Status,
-			"created": created,
-		},
-	})
-}
-
-func ListConsumptionExports(c *gin.Context) {
-	pageInfo := common.GetPageQuery(c)
-	status := model.SystemTaskStatus(c.Query("status"))
-	switch status {
-	case "", model.SystemTaskStatusPending, model.SystemTaskStatusRunning, model.SystemTaskStatusSucceeded, model.SystemTaskStatusFailed, model.SystemTaskStatusCanceled:
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid task status"})
-		return
-	}
-	tasks, total, err := service.ListConsumptionExportTasks(c.GetInt("id"), status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasks)
-	common.ApiSuccess(c, pageInfo)
-}
-
-func CancelConsumptionExport(c *gin.Context) {
-	canceled, err := service.CancelConsumptionExportTask(c.Param("task_id"), c.GetInt("id"))
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if !canceled {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "export task is not active"})
-		return
-	}
-	common.ApiSuccess(c, nil)
-}
-
-func DeleteConsumptionExport(c *gin.Context) {
-	deleted, err := service.DeleteConsumptionExportTask(c.Param("task_id"), c.GetInt("id"))
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if !deleted {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "active export tasks cannot be deleted"})
-		return
-	}
-	common.ApiSuccess(c, nil)
-}
-
-func DownloadConsumptionExport(c *gin.Context) {
-	file, err := service.GetConsumptionExportFile(c.Param("task_id"), c.GetInt("id"))
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if file == nil {
-		c.JSON(http.StatusGone, gin.H{"success": false, "message": "export file has expired or does not exist"})
-		return
-	}
+	defer func() {
+		if err := download.Close(); err != nil {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("failed to remove temporary consumption export: %v", err))
+		}
+	}()
 	c.Header("Cache-Control", "private, no-store")
-	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(file.FileName))
-	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file.Content)
+	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(download.FileName))
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("X-Content-Type-Options", "nosniff")
+	http.ServeContent(
+		c.Writer,
+		c.Request,
+		download.FileName,
+		time.Time{},
+		download.File,
+	)
 }

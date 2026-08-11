@@ -353,6 +353,7 @@
     "Amount the user pays to purchase this plan (USD).": "Montant que l'utilisateur paie pour acheter ce forfait (USD).",
     "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "Montant que l'utilisateur paie pour acheter ce forfait ; la devise réelle dépend de la passerelle de paiement.",
     "Amount to pay:": "Montant à payer :",
+    "An export is already being generated": "Une exportation est déjà en cours de génération",
     "An export task is already running": "Une exportation est déjà en cours",
     "An unexpected error occurred": "Une erreur inattendue est survenue",
     "An unknown error occurred": "Une erreur inconnue est survenue",

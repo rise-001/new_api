@@ -353,6 +353,7 @@
     "Amount the user pays to purchase this plan (USD).": "Amount the user pays to purchase this plan (USD).",
     "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.",
     "Amount to pay:": "Amount to pay:",
+    "An export is already being generated": "An export is already being generated",
     "An export task is already running": "An export task is already running",
     "An unexpected error occurred": "An unexpected error occurred",
     "An unknown error occurred": "An unknown error occurred",
