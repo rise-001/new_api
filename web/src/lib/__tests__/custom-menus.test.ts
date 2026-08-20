@@ -27,7 +27,7 @@ import {
 } from '../custom-menus.ts'
 
 describe('custom menu configuration', () => {
-  test('parses valid chat and top navigation entries', () => {
+  test('parses valid chat, personal, and top navigation entries', () => {
     const items = parseCustomMenuItems(
       JSON.stringify([
         {
@@ -35,6 +35,13 @@ describe('custom menu configuration', () => {
           url: 'https://support.example.com',
           name: 'Support',
           location: 'chat',
+          open_mode: 'embed',
+        },
+        {
+          id: 'account',
+          url: 'https://account.example.com',
+          name: 'Account',
+          location: 'personal',
           open_mode: 'embed',
         },
         {
@@ -47,9 +54,10 @@ describe('custom menu configuration', () => {
       ])
     )
 
-    assert.equal(items.length, 2)
+    assert.equal(items.length, 3)
     assert.equal(items[0].openMode, CUSTOM_MENU_OPEN_MODE.EMBED)
-    assert.equal(items[1].location, CUSTOM_MENU_LOCATION.TOP)
+    assert.equal(items[1].location, CUSTOM_MENU_LOCATION.PERSONAL)
+    assert.equal(items[2].location, CUSTOM_MENU_LOCATION.TOP)
   })
 
   test('drops unsafe URLs and embedded top navigation entries', () => {

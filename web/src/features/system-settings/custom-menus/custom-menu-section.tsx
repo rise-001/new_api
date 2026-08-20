@@ -42,6 +42,7 @@ import {
   CUSTOM_MENU_OPEN_MODE,
   serializeCustomMenuItems,
   type CustomMenuItem,
+  type CustomMenuLocation,
 } from '@/lib/custom-menus'
 
 import { SettingsPageFormActions } from '../components/settings-page-context'
@@ -63,6 +64,11 @@ export function CustomMenuSection(props: CustomMenuSectionProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<CustomMenuItem | null>(null)
   const [deleteItem, setDeleteItem] = useState<CustomMenuItem | null>(null)
+  const locationLabels: Record<CustomMenuLocation, string> = {
+    [CUSTOM_MENU_LOCATION.CHAT]: t('Chat area'),
+    [CUSTOM_MENU_LOCATION.PERSONAL]: t('Personal area'),
+    [CUSTOM_MENU_LOCATION.TOP]: t('Top navigation'),
+  }
 
   const initialSerialized = serializeCustomMenuItems(props.initialItems)
   const serialized = serializeCustomMenuItems(items)
@@ -163,11 +169,7 @@ export function CustomMenuSection(props: CustomMenuSectionProps) {
             id: 'location',
             header: t('Display area'),
             cell: (item) => (
-              <Badge variant='outline'>
-                {item.location === CUSTOM_MENU_LOCATION.CHAT
-                  ? t('Chat area')
-                  : t('Top navigation')}
-              </Badge>
+              <Badge variant='outline'>{locationLabels[item.location]}</Badge>
             ),
           },
           {

@@ -20,6 +20,7 @@ import type { SystemStatus } from '@/features/auth/types'
 
 export const CUSTOM_MENU_LOCATION = {
   CHAT: 'chat',
+  PERSONAL: 'personal',
   TOP: 'top',
 } as const
 
@@ -89,14 +90,15 @@ export function parseCustomMenuItems(raw: unknown): CustomMenuItem[] {
 
     const location = item.location
     const openMode = item.open_mode
-    const isChatItem =
-      location === CUSTOM_MENU_LOCATION.CHAT &&
+    const isSidebarItem =
+      (location === CUSTOM_MENU_LOCATION.CHAT ||
+        location === CUSTOM_MENU_LOCATION.PERSONAL) &&
       (openMode === CUSTOM_MENU_OPEN_MODE.EMBED ||
         openMode === CUSTOM_MENU_OPEN_MODE.NEW_TAB)
     const isTopItem =
       location === CUSTOM_MENU_LOCATION.TOP &&
       openMode === CUSTOM_MENU_OPEN_MODE.NEW_TAB
-    if (!isChatItem && !isTopItem) return []
+    if (!isSidebarItem && !isTopItem) return []
 
     return [
       {

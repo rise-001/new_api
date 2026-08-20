@@ -75,6 +75,22 @@ export function useSidebarData(): SidebarData {
       icon: CustomMenuIcon,
       external: item.openMode === CUSTOM_MENU_OPEN_MODE.NEW_TAB,
     }))
+  const personalMenuItems = customMenuItems
+    .filter((item) => item.location === CUSTOM_MENU_LOCATION.PERSONAL)
+    .map((item) => ({
+      title: item.name,
+      url:
+        item.openMode === CUSTOM_MENU_OPEN_MODE.EMBED
+          ? `/custom-menu/${item.id}`
+          : item.url,
+      configUrls: [
+        '/wallet',
+        '/profile?view=consumption',
+        '/profile?view=profile',
+      ],
+      icon: CustomMenuIcon,
+      external: item.openMode === CUSTOM_MENU_OPEN_MODE.NEW_TAB,
+    }))
 
   return {
     navGroups: [
@@ -147,6 +163,7 @@ export function useSidebarData(): SidebarData {
             url: '/profile?view=profile',
             icon: User,
           },
+          ...personalMenuItems,
         ],
       },
       {

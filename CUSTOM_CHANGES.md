@@ -393,3 +393,46 @@ cd /opt/new-api && docker pull ghcr.io/rise-001/new-api-custom:latest && docker 
 当前 `AGENTS.md` 明确保护所有与项目和作者组织相关的引用、归属和元数据，不允许删除或替换。该提交删除了错误页中受保护的项目 Issues 引用，因此不能作为后续更新需要保留的合法二开行为；在下一次合并或发布前必须恢复该项目引用，并确保上游更新不会再次删除其他受保护信息。
 
 本次只修改 `web/src/features/errors/general-error.tsx`，不涉及后端接口或数据库迁移。
+
+## 2026-08-20：自定义菜单支持个人板块
+
+### 功能说明
+
+- 自定义菜单的“展示板块”新增“个人中心”选项。
+- 选择个人中心后，菜单项显示在侧栏个人板块的现有菜单下方。
+- 个人板块菜单支持内嵌打开和新标签页打开。
+- 个人板块菜单遵循个人侧栏模块的整体可见性配置。
+
+### 配置格式
+
+`CustomMenuItems` 中的菜单项新增以下位置值：
+
+```json
+{
+  "id": "account",
+  "url": "https://account.example.com",
+  "name": "Account",
+  "location": "personal",
+  "open_mode": "embed"
+}
+```
+
+`location` 支持 `chat`、`personal` 和 `top`；`personal` 与 `chat` 一样支持 `embed` 和 `new_tab`，`top` 仍只支持 `new_tab`。
+
+### 实现位置
+
+- `setting/custom_menu.go`：扩展后端位置校验，允许 `personal`。
+- `web/src/lib/custom-menus.ts`：扩展前端配置解析。
+- `web/src/features/system-settings/custom-menus/`：新增个人中心展示板块选项及列表标签。
+- `web/src/hooks/use-sidebar-data.ts`：将个人菜单追加到个人侧栏分组末尾。
+- `web/src/routes/_authenticated/custom-menu/$menuId.tsx`：允许个人板块菜单使用内嵌页面。
+- `setting/custom_menu_test.go`、`web/src/lib/__tests__/custom-menus.test.ts`：补充个人板块配置回归覆盖。
+
+### 验证
+
+- 前端 TypeScript 类型检查通过。
+- 相关文件 lint 和格式检查通过。
+- 自定义菜单单元测试通过。
+- i18n 同步通过，未新增缺失翻译键。
+- Rsbuild 生产构建通过。
+- 当前环境未安装 Go 工具链，未运行后端 Go 测试。

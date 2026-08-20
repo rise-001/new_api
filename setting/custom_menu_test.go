@@ -10,7 +10,8 @@ import (
 func TestValidateCustomMenuItemsJSON(t *testing.T) {
 	valid := `[
 		{"id":"docs","url":"https://docs.example.com","name":"Docs","location":"top","open_mode":"new_tab"},
-		{"id":"support","url":"https://support.example.com/chat","name":"Support","location":"chat","open_mode":"embed"}
+		{"id":"support","url":"https://support.example.com/chat","name":"Support","location":"chat","open_mode":"embed"},
+		{"id":"account","url":"https://account.example.com","name":"Account","location":"personal","open_mode":"embed"}
 	]`
 	require.NoError(t, ValidateCustomMenuItemsJSON(valid))
 

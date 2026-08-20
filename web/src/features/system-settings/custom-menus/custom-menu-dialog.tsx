@@ -64,7 +64,11 @@ const createCustomMenuSchema = (t: (key: string) => string) =>
           isHttpUrl,
           t('Provide a valid URL starting with http:// or https://')
         ),
-      location: z.enum([CUSTOM_MENU_LOCATION.CHAT, CUSTOM_MENU_LOCATION.TOP]),
+      location: z.enum([
+        CUSTOM_MENU_LOCATION.CHAT,
+        CUSTOM_MENU_LOCATION.PERSONAL,
+        CUSTOM_MENU_LOCATION.TOP,
+      ]),
       openMode: z.enum([
         CUSTOM_MENU_OPEN_MODE.EMBED,
         CUSTOM_MENU_OPEN_MODE.NEW_TAB,
@@ -112,6 +116,7 @@ export function CustomMenuDialog(props: CustomMenuDialogProps) {
     label: string
   }> = [
     { value: CUSTOM_MENU_LOCATION.CHAT, label: t('Chat area') },
+    { value: CUSTOM_MENU_LOCATION.PERSONAL, label: t('Personal area') },
     { value: CUSTOM_MENU_LOCATION.TOP, label: t('Top navigation') },
   ]
   const openModeOptions: Array<{

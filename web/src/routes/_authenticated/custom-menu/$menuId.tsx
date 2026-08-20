@@ -37,7 +37,8 @@ function CustomMenuEmbedPage() {
   const item = items.find(
     (candidate) =>
       candidate.id === menuId &&
-      candidate.location === CUSTOM_MENU_LOCATION.CHAT &&
+      (candidate.location === CUSTOM_MENU_LOCATION.CHAT ||
+        candidate.location === CUSTOM_MENU_LOCATION.PERSONAL) &&
       candidate.openMode === CUSTOM_MENU_OPEN_MODE.EMBED
   )
 

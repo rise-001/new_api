@@ -11,14 +11,15 @@ import (
 )
 
 const (
-	CustomMenuOptionKey       = "CustomMenuItems"
-	CustomMenuLocationChat    = "chat"
-	CustomMenuLocationTop     = "top"
-	CustomMenuOpenModeEmbed   = "embed"
-	CustomMenuOpenModeNewTab  = "new_tab"
-	customMenuMaxItems        = 50
-	customMenuMaxNameRunes    = 64
-	customMenuMaxURLLength    = 2048
+	CustomMenuOptionKey        = "CustomMenuItems"
+	CustomMenuLocationChat     = "chat"
+	CustomMenuLocationPersonal = "personal"
+	CustomMenuLocationTop      = "top"
+	CustomMenuOpenModeEmbed    = "embed"
+	CustomMenuOpenModeNewTab   = "new_tab"
+	customMenuMaxItems         = 50
+	customMenuMaxNameRunes     = 64
+	customMenuMaxURLLength     = 2048
 )
 
 var customMenuIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -69,7 +70,7 @@ func ValidateCustomMenuItemsJSON(value string) error {
 		}
 
 		switch item.Location {
-		case CustomMenuLocationChat:
+		case CustomMenuLocationChat, CustomMenuLocationPersonal:
 			if item.OpenMode != CustomMenuOpenModeEmbed && item.OpenMode != CustomMenuOpenModeNewTab {
 				return fmt.Errorf("custom menu item %d has an invalid open mode", itemNumber)
 			}
