@@ -38,6 +38,9 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
 	}
+	if isGeminiImageModel(info) && geminiResponseInlineImageCount(&geminiResponse) == 0 {
+		return nil, types.NewOpenAIError(fmt.Errorf("no usable images generated"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
 
 	// 计算使用量（优先上游 UsageMetadata，缺失时本地估算并保留 Gemini 计费语义）
 	usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)

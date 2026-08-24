@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -107,12 +108,20 @@ func geminiResponseInlineImageCount(response *dto.GeminiChatResponse) int {
 	count := 0
 	for _, candidate := range response.Candidates {
 		for _, part := range candidate.Content.Parts {
-			if part.InlineData != nil && part.InlineData.MimeType != "" {
+			if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image/") && strings.TrimSpace(part.InlineData.Data) != "" {
 				count++
 			}
 		}
 	}
 	return count
+}
+
+func isGeminiImageModel(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	modelName := strings.TrimPrefix(info.UpstreamModelName, "models/")
+	return model_setting.IsGeminiModelSupportImagine(modelName)
 }
 
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
@@ -166,7 +175,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		// 统计图片数量
 		for _, candidate := range geminiResponse.Candidates {
 			for _, part := range candidate.Content.Parts {
-				if part.InlineData != nil && part.InlineData.MimeType != "" {
+				if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image/") && strings.TrimSpace(part.InlineData.Data) != "" {
 					imageCount++
 				}
 				if part.Text != "" {
@@ -186,6 +195,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			sr.Stop(fmt.Errorf("gemini callback stopped"))
 		}
 	})
+	if isGeminiImageModel(info) && imageCount == 0 {
+		return nil, types.NewOpenAIError(errors.New("no usable images generated"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
 
 	if !hasBillableUsageMetadata {
 		if info.ReceivedResponseCount > 0 {
@@ -343,6 +355,10 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			)
 		}
 
+		if isGeminiImageModel(info) {
+			return nil, newAPIError
+		}
+
 		service.ResetStatusCode(newAPIError, c.GetString("status_code_mapping"))
 
 		switch info.RelayFormat {
@@ -357,6 +373,9 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			})
 		}
 		return &usage, nil
+	}
+	if isGeminiImageModel(info) && geminiResponseInlineImageCount(&geminiResponse) == 0 {
+		return nil, types.NewOpenAIError(errors.New("no usable images generated"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)
 	fullTextResponse.Model = info.UpstreamModelName
@@ -460,9 +479,15 @@ func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		if prediction.RaiFilteredReason != "" {
 			continue // skip filtered image
 		}
+		if strings.TrimSpace(prediction.BytesBase64Encoded) == "" {
+			continue // a prediction without image bytes is not a usable result
+		}
 		openAIResponse.Data = append(openAIResponse.Data, dto.ImageData{
 			B64Json: prediction.BytesBase64Encoded,
 		})
+	}
+	if len(openAIResponse.Data) == 0 {
+		return nil, types.NewOpenAIError(errors.New("no usable images generated"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
 
 	jsonResponse, jsonErr := common.Marshal(openAIResponse)

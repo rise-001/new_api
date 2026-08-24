@@ -67,6 +67,52 @@ func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.
 	require.Equal(t, 1120, usage.CompletionTokenDetails.ReasoningTokens)
 }
 
+func TestGeminiImageHandlerRejectsResponsesWithoutUsableImageData(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+
+	info := &relaycommon.RelayInfo{OriginModelName: "imagen-3"}
+	tests := []dto.GeminiImageResponse{
+		{Predictions: []dto.GeminiImagePrediction{{RaiFilteredReason: "SAFETY"}}},
+		{Predictions: []dto.GeminiImagePrediction{{BytesBase64Encoded: ""}}},
+	}
+	for _, payload := range tests {
+		body, err := common.Marshal(payload)
+		require.NoError(t, err)
+		resp := &http.Response{Body: io.NopCloser(bytes.NewReader(body))}
+
+		usage, apiErr := GeminiImageHandler(c, info, resp)
+		require.Nil(t, usage)
+		require.NotNil(t, apiErr)
+		require.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	}
+}
+
+func TestGeminiImageModelChatHandlerRejectsResponsesWithoutInlineImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName:  "gemini-3.1-flash-image-preview",
+		UpstreamModelName: "gemini-3.1-flash-image-preview",
+	}
+	payload := dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{
+			Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{{Text: "I could not generate an image"}}},
+		}},
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+	resp := &http.Response{Body: io.NopCloser(bytes.NewReader(body))}
+
+	usage, apiErr := GeminiChatHandler(c, info, resp)
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	require.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+}
+
 func TestGeminiStreamHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
