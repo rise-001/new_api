@@ -489,3 +489,44 @@ go test ./relay/channel/gemini
 - i18n 同步通过，未新增缺失翻译键。
 - Rsbuild 生产构建通过。
 - 当前环境未安装 Go 工具链，未运行后端 Go 测试。
+
+## 2026-08-26：邀请额度划转记录
+
+提交：`ae20ef4f feat: add affiliate transfer records`
+
+### 功能说明
+
+- 用户将邀请额度划转到可用额度后，系统新增一条划转审计日志，记录用户、时间和划转额度。
+- 管理员可从个人板块的“划转记录”入口查看全部用户的邀请额度划转历史。
+- 列表支持按用户名、开始时间和结束时间筛选，并按每页 20 条分页展示。
+- “划转记录”侧栏模块默认开启，也可通过现有个人侧栏模块配置控制入口显示。
+- 页面和固定文案已同步英文、简体中文、繁体中文、法语、日语、俄语和越南语。
+
+### API 与权限
+
+- `GET /api/user/transfer`：分页查询邀请额度划转日志。
+- 查询参数包括 `p`、`page_size`、`username`、`start_timestamp` 和 `end_timestamp`。
+- 接口位于现有 `AdminAuth` 路由组中，仅管理员可以访问；前端路由入口同样要求 `ROLE.ADMIN`。
+
+### 数据存储与一致性
+
+- 本次不新增数据库表或字段，划转记录复用日志数据库中的 `logs` 表。
+- 日志类型为 `LogTypeManage`，`content` 固定为 `Affiliate quota transfer`，划转额度同时写入 `quota` 和结构化的 `Other.op.params.quota`。
+- 查询兼容主日志数据库和 ClickHouse 日志数据库，并沿用现有用户名精确过滤和 ClickHouse 展示 ID 处理。
+- 审计日志在额度划转事务提交成功后写入。日志写入失败会记录系统错误，但不会回滚已经完成的额度划转。
+- 部署后只能记录新发生的划转，既有划转不会自动补录。
+
+### 实现位置
+
+- `model/user.go`：额度划转事务提交成功后触发审计日志写入。
+- `model/log.go`：创建划转日志，并提供筛选、计数和分页查询。
+- `controller/log.go`、`router/api-router.go`：增加管理员查询接口。
+- `web/src/features/transfer-records/`：实现查询请求、筛选条件、记录表格和分页。
+- `web/src/routes/_authenticated/transfer-records/index.tsx`：注册 `/transfer-records` 页面。
+- `web/src/hooks/use-sidebar-data.ts`、`web/src/hooks/use-sidebar-config.ts`：增加管理员入口及侧栏模块配置。
+- `web/src/features/profile/components/sidebar-modules-card.tsx`：增加“划转记录”模块开关。
+- `web/src/i18n/locales/*.json`：补齐 7 种前端语言文案。
+
+### 升级注意
+
+同步上游时重点检查 `TransferAffQuotaToQuota` 的事务提交位置、日志表筛选逻辑、用户管理路由组、个人侧栏配置和生成的 `web/src/routeTree.gen.ts`，避免划转成功后漏记日志或放宽查询权限。
