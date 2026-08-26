@@ -185,6 +185,51 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 	}
 }
 
+// RecordAffiliateTransferLog records a quota transfer for the admin audit view.
+func RecordAffiliateTransferLog(userId int, quota int) {
+	username, _ := GetUsernameById(userId, false)
+	other := map[string]interface{}{
+		"op": buildOpField("affiliate_transfer", map[string]interface{}{"quota": quota}),
+	}
+	log := &Log{
+		UserId: userId, Username: username, CreatedAt: common.GetTimestamp(),
+		Type: LogTypeManage, Content: "Affiliate quota transfer", Quota: quota,
+		Other: common.MapToJsonStr(other),
+	}
+	if err := createLog(log); err != nil {
+		common.SysLog("failed to record affiliate transfer log: " + err.Error())
+	}
+}
+
+func GetAffiliateTransferLogs(startTimestamp int64, endTimestamp int64, username string, startIdx int, num int) (logs []*Log, total int64, err error) {
+	tx := LOG_DB.Where("logs.type = ? AND logs.content = ?", LogTypeManage, "Affiliate quota transfer")
+	if username != "" {
+		if tx, err = applyExplicitLogTextFilter(tx, "logs.username", username); err != nil {
+			return nil, 0, err
+		}
+	}
+	if startTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+	}
+	if err = tx.Model(&Log{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	order := "logs.created_at desc, logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("logs.")
+	}
+	if err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		assignDisplayLogIds(logs, startIdx)
+	}
+	return logs, total, nil
+}
+
 // buildOpField 构建语言无关的操作描述（写入 Other.op）。
 // 前端依据 action(稳定操作标识) + params(结构化参数) 在渲染期用 i18n 本地化展示，
 // 因此不在数据库中存储自然语言句子。

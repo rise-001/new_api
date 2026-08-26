@@ -163,6 +163,12 @@ export function useSidebarData(): SidebarData {
             url: '/profile?view=profile',
             icon: User,
           },
+          {
+            title: t('Transfer Records'),
+            url: '/transfer-records',
+            icon: ReceiptText,
+            requiredRole: ROLE.ADMIN,
+          },
           ...personalMenuItems,
         ],
       },

@@ -125,6 +125,11 @@ export function SidebarModulesCard() {
           title: t('Personal Settings'),
           description: t('Personal info settings'),
         },
+        {
+          key: 'transfer',
+          title: t('Transfer Records'),
+          description: t('Affiliate quota transfer history'),
+        },
       ],
     },
   ]

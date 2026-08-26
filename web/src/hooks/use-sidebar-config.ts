@@ -55,6 +55,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     topup: true,
     consumption: true,
     personal: true,
+    transfer: true,
   },
   admin: {
     enabled: true,
@@ -113,6 +114,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
     module: 'consumption',
   },
   '/profile?view=profile': { section: 'personal', module: 'personal' },
+  '/transfer-records': { section: 'personal', module: 'transfer' },
   '/channels': { section: 'admin', module: 'channel' },
   '/models': { section: 'admin', module: 'models' },
   '/models/metadata': { section: 'admin', module: 'models' },
