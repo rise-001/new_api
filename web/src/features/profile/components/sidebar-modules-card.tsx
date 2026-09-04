@@ -128,7 +128,7 @@ export function SidebarModulesCard() {
         {
           key: 'transfer',
           title: t('Transfer Records'),
-          description: t('Affiliate quota transfer history'),
+          description: t('Manual quota addition history'),
         },
       ],
     },

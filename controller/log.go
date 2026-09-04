@@ -10,11 +10,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func GetAffiliateTransferLogs(c *gin.Context) {
+func GetQuotaAdditionLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
-	logs, total, err := model.GetAffiliateTransferLogs(
+	logs, total, err := model.GetQuotaAdditionLogs(
 		startTimestamp,
 		endTimestamp,
 		c.Query("username"),

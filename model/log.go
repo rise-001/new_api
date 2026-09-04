@@ -201,18 +201,64 @@ func RecordAffiliateTransferLog(userId int, quota int) {
 	}
 }
 
-func GetAffiliateTransferLogs(startTimestamp int64, endTimestamp int64, username string, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx := LOG_DB.Where("logs.type = ? AND logs.content = ?", LogTypeManage, "Affiliate quota transfer")
+type QuotaAdditionLog struct {
+	Id        int    `json:"id"`
+	UserId    int    `json:"user_id"`
+	Username  string `json:"username"`
+	CreatedAt int64  `json:"created_at"`
+	Amount    string `json:"amount"`
+}
+
+type quotaAdditionLogOther struct {
+	Op struct {
+		Action string `json:"action"`
+		Params struct {
+			Quota        string `json:"quota"`
+			TargetUserId int    `json:"target_user_id"`
+		} `json:"params"`
+	} `json:"op"`
+}
+
+const (
+	quotaAdditionContentPrefix       = "Increased user quota by "
+	legacyQuotaAdditionContentPrefix = "管理员增加用户额度 "
+)
+
+func GetQuotaAdditionLogs(startTimestamp int64, endTimestamp int64, username string, startIdx int, num int) (records []*QuotaAdditionLog, total int64, err error) {
+	tx := LOG_DB.Where(
+		"logs.type = ? AND (logs.content LIKE ? OR logs.content LIKE ?)",
+		LogTypeManage,
+		quotaAdditionContentPrefix+"%",
+		legacyQuotaAdditionContentPrefix+"%",
+	)
 	if username != "" {
-		if tx, err = applyExplicitLogTextFilter(tx, "logs.username", username); err != nil {
+		var targetUserId int
+		if err = DB.Unscoped().Model(&User{}).Select("id").Where("username = ?", username).Scan(&targetUserId).Error; err != nil {
 			return nil, 0, err
+		}
+
+		if targetUserId == 0 {
+			tx = tx.Where("logs.content LIKE ? AND logs.username = ?", legacyQuotaAdditionContentPrefix+"%", username)
+		} else {
+			targetIdBeforeComma := fmt.Sprintf(`%%"target_user_id":%d,%%`, targetUserId)
+			targetIdBeforeBrace := fmt.Sprintf(`%%"target_user_id":%d}%%`, targetUserId)
+			tx = tx.Where(
+				"(logs.content LIKE ? AND logs.username = ?) OR (logs.content LIKE ? AND ((logs.other LIKE ? OR logs.other LIKE ?) OR (logs.user_id = ? AND logs.other NOT LIKE ?)))",
+				legacyQuotaAdditionContentPrefix+"%",
+				username,
+				quotaAdditionContentPrefix+"%",
+				targetIdBeforeComma,
+				targetIdBeforeBrace,
+				targetUserId,
+				`%"target_user_id":%`,
+			)
 		}
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
 	}
 	if endTimestamp != 0 {
-		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+		tx = tx.Where("logs.created_at < ?", endTimestamp)
 	}
 	if err = tx.Model(&Log{}).Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -221,13 +267,58 @@ func GetAffiliateTransferLogs(startTimestamp int64, endTimestamp int64, username
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("logs.")
 	}
+	var logs []*Log
 	if err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error; err != nil {
 		return nil, 0, err
 	}
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		assignDisplayLogIds(logs, startIdx)
 	}
-	return logs, total, nil
+
+	records = make([]*QuotaAdditionLog, 0, len(logs))
+	targetUserIds := make([]int, 0, len(logs))
+	for _, log := range logs {
+		record := &QuotaAdditionLog{
+			Id:        log.Id,
+			UserId:    log.UserId,
+			Username:  log.Username,
+			CreatedAt: log.CreatedAt,
+		}
+		var details quotaAdditionLogOther
+		if common.UnmarshalJsonStr(log.Other, &details) == nil && details.Op.Action == "user.quota_add" {
+			record.Amount = details.Op.Params.Quota
+			if details.Op.Params.TargetUserId > 0 {
+				record.UserId = details.Op.Params.TargetUserId
+				record.Username = ""
+				targetUserIds = append(targetUserIds, record.UserId)
+			}
+		}
+		if record.Amount == "" {
+			record.Amount = strings.TrimPrefix(log.Content, quotaAdditionContentPrefix)
+			record.Amount = strings.TrimPrefix(record.Amount, legacyQuotaAdditionContentPrefix)
+		}
+		records = append(records, record)
+	}
+
+	if len(targetUserIds) > 0 {
+		var users []struct {
+			Id       int
+			Username string
+		}
+		if err = DB.Unscoped().Model(&User{}).Select("id", "username").Where("id IN ?", targetUserIds).Find(&users).Error; err != nil {
+			return nil, 0, err
+		}
+		usernames := make(map[int]string, len(users))
+		for _, user := range users {
+			usernames[user.Id] = user.Username
+		}
+		for _, record := range records {
+			if targetUsername, ok := usernames[record.UserId]; ok {
+				record.Username = targetUsername
+			}
+		}
+	}
+	return records, total, nil
 }
 
 // buildOpField 构建语言无关的操作描述（写入 Other.op）。
