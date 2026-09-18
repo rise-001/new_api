@@ -41,4 +41,8 @@ func UsingLogDatabase(databaseType DatabaseType) bool {
 	return logDatabaseType == databaseType
 }
 
-var SQLitePath = "one-api.db?_busy_timeout=30000"
+// The pure-Go SQLite driver (github.com/glebarez/go-sqlite) only applies
+// `_pragma=...` DSN parameters. The CGO driver's `_busy_timeout=` spelling is
+// silently ignored, which leaves readers failing with SQLITE_BUSY the moment a
+// write holds the lock instead of waiting for it.
+var SQLitePath = "one-api.db?_pragma=busy_timeout(30000)"
