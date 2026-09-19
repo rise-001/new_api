@@ -24,7 +24,6 @@ type ConsumptionExportLogQuery struct {
 	StartTimestamp int64
 	EndTimestamp   int64
 	TokenID        int
-	TokenName      *string
 }
 
 type ConsumptionExportLogCursor struct {
@@ -38,6 +37,30 @@ func CountConsumptionExportLogs(ctx context.Context, query ConsumptionExportLogQ
 	var total int64
 	err := tx.Model(&Log{}).Count(&total).Error
 	return total, err
+}
+
+// CountConsumptionExportLogsByToken returns the number of matching rows per
+// token name. The exporter needs this layout before it reads any detail row so
+// it can create one worksheet per token and keep row numbers continuous across
+// those worksheets while reading the logs exactly once.
+func CountConsumptionExportLogsByToken(ctx context.Context, query ConsumptionExportLogQuery) (map[string]int64, error) {
+	var groups []struct {
+		TokenName string
+		Total     int64
+	}
+	err := consumptionExportLogQuery(ctx, query).
+		Model(&Log{}).
+		Select("token_name, count(*) as total").
+		Group("token_name").
+		Scan(&groups).Error
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64, len(groups))
+	for _, group := range groups {
+		counts[group.TokenName] = group.Total
+	}
+	return counts, nil
 }
 
 func GetConsumptionExportLogsAfter(ctx context.Context, query ConsumptionExportLogQuery, cursor ConsumptionExportLogCursor, limit int) ([]*Log, error) {
@@ -63,9 +86,6 @@ func consumptionExportLogQuery(ctx context.Context, query ConsumptionExportLogQu
 		Where("created_at >= ? AND created_at <= ?", query.StartTimestamp, query.EndTimestamp)
 	if query.TokenID > 0 {
 		tx = tx.Where("token_id = ?", query.TokenID)
-	}
-	if query.TokenName != nil {
-		tx = tx.Where("token_name = ?", *query.TokenName)
 	}
 	return tx
 }

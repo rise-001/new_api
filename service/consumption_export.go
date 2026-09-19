@@ -23,9 +23,15 @@ import (
 const (
 	consumptionExportBatchSize       = 1000
 	consumptionExportMaxRecords      = 300000
+	consumptionExportMaxTokenSheets  = 200
 	consumptionExportMaxRangeSeconds = int64(31 * 24 * time.Hour / time.Second)
 	consumptionExportCleanupInterval = time.Minute
 	consumptionExportTempFileTTL     = 24 * time.Hour
+
+	// Both patterns double as os.CreateTemp patterns and filepath.Glob
+	// patterns, so the startup cleanup always covers what the exporter writes.
+	consumptionExportFilePattern = "new-api-consumption-*.xlsx"
+	consumptionExportRowsPattern = "new-api-consumption-rows-*.xml"
 )
 
 type ConsumptionExportPayload struct {
@@ -168,7 +174,7 @@ func GenerateConsumptionExport(ctx context.Context, userID int, payload Consumpt
 		return nil, errors.New("An export is already being generated")
 	}
 
-	temporaryFile, err := os.CreateTemp("", "new-api-consumption-*.xlsx")
+	temporaryFile, err := os.CreateTemp("", consumptionExportFilePattern)
 	if err != nil {
 		activeConsumptionExports.Delete(userID)
 		return nil, err
@@ -187,12 +193,38 @@ func GenerateConsumptionExport(ctx context.Context, userID int, payload Consumpt
 		EndTimestamp:   payload.EndTimestamp,
 		TokenID:        payload.TokenID,
 	}
-	total, err := model.CountConsumptionExportLogs(ctx, query)
-	if err != nil {
-		return nil, err
+
+	// The detail worksheets are laid out before any row is read, so the pass
+	// below can write every row as it arrives while keeping row numbers
+	// continuous across per-token worksheets. Counting is an aggregate query;
+	// it does not read the rows themselves.
+	total := int64(0)
+	tokenCounts := map[string]int64{}
+	if payload.GroupByToken && !payload.DailySummary {
+		tokenCounts, err = model.CountConsumptionExportLogsByToken(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		if len(tokenCounts) > consumptionExportMaxTokenSheets {
+			return nil, fmt.Errorf("export spans %d API tokens but at most %d separate worksheets are supported; turn off the per-token worksheet option", len(tokenCounts), consumptionExportMaxTokenSheets)
+		}
+		for _, count := range tokenCounts {
+			total += count
+		}
+	} else {
+		total, err = model.CountConsumptionExportLogs(ctx, query)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if total > consumptionExportMaxRecords {
 		return nil, fmt.Errorf("export contains %d records; narrow the time range to at most %d records", total, consumptionExportMaxRecords)
+	}
+
+	detail, detailErr := newConsumptionExportDetail(payload, tokenCounts, total)
+	defer detail.close(ctx)
+	if detailErr != nil {
+		return nil, detailErr
 	}
 
 	location := time.FixedZone("export", -payload.TimezoneOffset*60)
@@ -205,7 +237,7 @@ func GenerateConsumptionExport(ctx context.Context, userID int, payload Consumpt
 		if recordCount > consumptionExportMaxRecords {
 			return fmt.Errorf("export contains more than %d records; narrow the time range", consumptionExportMaxRecords)
 		}
-		record := consumptionRecordFromLog(log, recordCount, location)
+		record := consumptionRecordFromLog(log, location)
 		token := tokenStats[record.TokenName]
 		if token == nil {
 			token = &consumptionTokenStats{TokenName: record.TokenName}
@@ -254,13 +286,24 @@ func GenerateConsumptionExport(ctx context.Context, userID int, payload Consumpt
 			daily.ConsumeCount++
 			daily.ConsumeAmount += record.Amount
 		}
-		return nil
+		return detail.write(record)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	sheets := consumptionExportDownloadSheets(ctx, payload, query, recordCount, tokenStats, modelStats, dailyStats, location)
+	sheets := []xlsxSheet{buildTokenSummarySheet(tokenStats)}
+	if payload.DailySummary {
+		sheets = append(sheets, buildDailySummarySheet(dailyStats))
+	} else {
+		detailSheets, err := detail.finish()
+		if err != nil {
+			return nil, err
+		}
+		sheets = append(sheets, detailSheets...)
+	}
+	sheets = append(sheets, buildModelSummarySheet(modelStats))
+
 	if err := writeXLSX(temporaryFile, sheets); err != nil {
 		return nil, err
 	}
@@ -297,14 +340,140 @@ func forEachConsumptionExportLog(ctx context.Context, query model.ConsumptionExp
 	}
 }
 
-func writeConsumptionExportRecords(ctx context.Context, query model.ConsumptionExportLogQuery, location *time.Location, sequence *int64, write func(consumptionExportRecord) error) error {
-	return forEachConsumptionExportLog(ctx, query, func(log *model.Log) error {
-		*sequence = *sequence + 1
-		return write(consumptionRecordFromLog(log, *sequence, location))
-	})
+// consumptionExportDetailSheet accumulates one worksheet of consumption detail
+// rows in a temporary file while the logs are read. start is the row number
+// that precedes this worksheet, so row numbers stay continuous when the export
+// is split into one worksheet per API token.
+type consumptionExportDetailSheet struct {
+	name     string
+	file     *os.File
+	rows     *xlsxRowWriter
+	totals   consumptionDetailTotals
+	start    int64
+	expected int64
+	written  int64
 }
 
-func consumptionRecordFromLog(log *model.Log, sequence int64, location *time.Location) consumptionExportRecord {
+// consumptionExportDetail routes every consumption record to its worksheet
+// during the single pass over the logs. Daily-summary exports carry no detail
+// worksheets, in which case it accepts and drops every record.
+type consumptionExportDetail struct {
+	sheets  []*consumptionExportDetailSheet
+	byToken map[string]*consumptionExportDetailSheet
+}
+
+func newConsumptionExportDetailSheet(name string, start int64, expected int64) (*consumptionExportDetailSheet, error) {
+	file, err := os.CreateTemp("", consumptionExportRowsPattern)
+	if err != nil {
+		return nil, err
+	}
+	return &consumptionExportDetailSheet{
+		name:     name,
+		file:     file,
+		rows:     newXLSXRowWriter(file, len(consumptionDetailColumns())),
+		start:    start,
+		expected: expected,
+	}, nil
+}
+
+func newConsumptionExportDetail(payload ConsumptionExportPayload, tokenCounts map[string]int64, total int64) (*consumptionExportDetail, error) {
+	detail := &consumptionExportDetail{}
+	if payload.DailySummary {
+		return detail, nil
+	}
+
+	if !payload.GroupByToken || len(tokenCounts) == 0 {
+		sheet, err := newConsumptionExportDetailSheet("消费清单", 0, total)
+		if err != nil {
+			return detail, err
+		}
+		detail.sheets = append(detail.sheets, sheet)
+		return detail, nil
+	}
+
+	tokenNames := make([]string, 0, len(tokenCounts))
+	for tokenName := range tokenCounts {
+		tokenNames = append(tokenNames, tokenName)
+	}
+	sort.Strings(tokenNames)
+	usedSheetNames := map[string]int{"令牌汇总": 1, "模型统计": 1}
+	detail.byToken = make(map[string]*consumptionExportDetailSheet, len(tokenNames))
+	start := int64(0)
+	for _, tokenName := range tokenNames {
+		displayName := tokenName
+		if displayName == "" {
+			displayName = "未命名令牌"
+		}
+		sheet, err := newConsumptionExportDetailSheet(uniqueSheetName(displayName, usedSheetNames), start, tokenCounts[tokenName])
+		if err != nil {
+			return detail, err
+		}
+		detail.sheets = append(detail.sheets, sheet)
+		detail.byToken[tokenName] = sheet
+		start += tokenCounts[tokenName]
+	}
+	return detail, nil
+}
+
+func (detail *consumptionExportDetail) write(record consumptionExportRecord) error {
+	if len(detail.sheets) == 0 {
+		return nil
+	}
+	sheet := detail.sheets[0]
+	if detail.byToken != nil {
+		sheet = detail.byToken[record.TokenName]
+		if sheet == nil {
+			return fmt.Errorf("consumption export changed while being generated: API token %q appeared after the worksheets were planned; retry", record.TokenName)
+		}
+	}
+	if sheet.written >= sheet.expected {
+		return fmt.Errorf("consumption export changed while being generated: worksheet %q expected %d records, found at least %d; retry", sheet.name, sheet.expected, sheet.written+1)
+	}
+	sheet.written++
+	record.Sequence = sheet.start + sheet.written
+	sheet.totals.Add(record)
+	return sheet.rows.Write(consumptionDetailRow(record))
+}
+
+// finish appends the totals row to every worksheet and rewinds its temporary
+// file so the workbook writer can copy the rendered rows straight in.
+func (detail *consumptionExportDetail) finish() ([]xlsxSheet, error) {
+	sheets := make([]xlsxSheet, 0, len(detail.sheets))
+	for _, sheet := range detail.sheets {
+		if sheet.written != sheet.expected {
+			return nil, fmt.Errorf("consumption export changed while being generated: worksheet %q expected %d records, found %d; retry", sheet.name, sheet.expected, sheet.written)
+		}
+		if err := sheet.rows.Write(sheet.totals.Row()); err != nil {
+			return nil, err
+		}
+		if err := sheet.rows.Flush(); err != nil {
+			return nil, err
+		}
+		if _, err := sheet.file.Seek(0, 0); err != nil {
+			return nil, err
+		}
+		sheets = append(sheets, xlsxSheet{
+			Name:     sheet.name,
+			Columns:  consumptionDetailColumns(),
+			RawRows:  sheet.file,
+			RowCount: sheet.rows.Count(),
+		})
+	}
+	return sheets, nil
+}
+
+func (detail *consumptionExportDetail) close(ctx context.Context) {
+	for _, sheet := range detail.sheets {
+		path := sheet.file.Name()
+		closeErr := sheet.file.Close()
+		removeErr := os.Remove(path)
+		if err := errors.Join(closeErr, removeErr); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("failed to remove temporary consumption export rows: %v", err))
+		}
+	}
+}
+
+func consumptionRecordFromLog(log *model.Log, location *time.Location) consumptionExportRecord {
 	other := consumptionLogOther{}
 	if log.Other != "" {
 		_ = common.UnmarshalJsonStr(log.Other, &other)
@@ -329,7 +498,6 @@ func consumptionRecordFromLog(log *model.Log, sequence int64, location *time.Loc
 		duration += fmt.Sprintf(" / %.1fs", float64(other.FirstResponseTimeMS)/1000)
 	}
 	return consumptionExportRecord{
-		Sequence:         sequence,
 		UserID:           log.UserId,
 		Username:         log.Username,
 		CreatedAt:        time.Unix(log.CreatedAt, 0).In(location).Format("2006-01-02 15:04:05"),
@@ -348,53 +516,6 @@ func consumptionRecordFromLog(log *model.Log, sequence int64, location *time.Loc
 		IP:               log.Ip,
 		Detail:           log.Content,
 	}
-}
-
-func consumptionExportDownloadSheets(ctx context.Context, payload ConsumptionExportPayload, query model.ConsumptionExportLogQuery, recordCount int64, tokenStats map[string]*consumptionTokenStats, modelStats map[string]*consumptionExportStats, dailyStats map[string]*consumptionDailyStats, location *time.Location) []xlsxSheet {
-	tokenSummarySheet := buildTokenSummarySheet(tokenStats)
-	if payload.DailySummary {
-		return []xlsxSheet{tokenSummarySheet, buildDailySummarySheet(dailyStats), buildModelSummarySheet(modelStats)}
-	}
-
-	sheets := []xlsxSheet{tokenSummarySheet}
-	sequence := int64(0)
-	if payload.GroupByToken {
-		tokenNames := make([]string, 0, len(tokenStats))
-		for tokenName := range tokenStats {
-			tokenNames = append(tokenNames, tokenName)
-		}
-		sort.Strings(tokenNames)
-		usedSheetNames := map[string]int{"令牌汇总": 1, "模型统计": 1}
-		for _, tokenName := range tokenNames {
-			tokenNameFilter := tokenName
-			displayName := tokenName
-			if displayName == "" {
-				displayName = "未命名令牌"
-			}
-			sheetQuery := query
-			sheetQuery.TokenName = &tokenNameFilter
-			sheets = append(sheets, buildStreamingConsumptionDetailSheet(
-				uniqueSheetName(displayName, usedSheetNames),
-				tokenStats[tokenName].ConsumeCount+tokenStats[tokenName].RefundCount,
-				func(write func(consumptionExportRecord) error) error {
-					return writeConsumptionExportRecords(ctx, sheetQuery, location, &sequence, write)
-				},
-			))
-		}
-		if len(tokenNames) == 0 {
-			sheets = append(sheets, buildStreamingConsumptionDetailSheet("消费清单", 0, func(func(consumptionExportRecord) error) error { return nil }))
-		}
-	} else {
-		sheets = append(sheets, buildStreamingConsumptionDetailSheet(
-			"消费清单",
-			recordCount,
-			func(write func(consumptionExportRecord) error) error {
-				return writeConsumptionExportRecords(ctx, query, location, &sequence, write)
-			},
-		))
-	}
-	sheets = append(sheets, buildModelSummarySheet(modelStats))
-	return sheets
 }
 
 func buildTokenSummarySheet(statsByToken map[string]*consumptionTokenStats) xlsxSheet {
@@ -481,32 +602,6 @@ func (totals consumptionDetailTotals) Row() []xlsxCell {
 		totalIntegerCell(totals.CacheReadTokens), totalIntegerCell(totals.CacheWriteTokens), totalIntegerCell(totals.Quota),
 		totalAmountCell(totals.Amount), totalTextCell(""), totalTextCell(""), totalTextCell(""), totalTextCell(""),
 		totalTextCell(""), totalTextCell(""),
-	}
-}
-
-func buildStreamingConsumptionDetailSheet(name string, recordCount int64, writeRecords func(func(consumptionExportRecord) error) error) xlsxSheet {
-	return xlsxSheet{
-		Name:     name,
-		Columns:  consumptionDetailColumns(),
-		RowCount: int(recordCount) + 1,
-		WriteRows: func(writeRow func([]xlsxCell) error) error {
-			totals := consumptionDetailTotals{}
-			written := int64(0)
-			if err := writeRecords(func(record consumptionExportRecord) error {
-				if written >= recordCount {
-					return fmt.Errorf("consumption export changed while being generated: expected %d records, found at least %d; retry", recordCount, written+1)
-				}
-				written++
-				totals.Add(record)
-				return writeRow(consumptionDetailRow(record))
-			}); err != nil {
-				return err
-			}
-			if written != recordCount {
-				return fmt.Errorf("consumption export changed while being generated: expected %d records, found %d; retry", recordCount, written)
-			}
-			return writeRow(totals.Row())
-		},
 	}
 }
 
@@ -618,9 +713,13 @@ func uniqueSheetName(name string, used map[string]int) string {
 var consumptionExportTempCleanupOnce sync.Once
 
 func deleteExpiredConsumptionExportTempFiles(directory string, cutoff time.Time) (int, error) {
-	paths, err := filepath.Glob(filepath.Join(directory, "new-api-consumption-*.xlsx"))
-	if err != nil {
-		return 0, err
+	paths := make([]string, 0)
+	for _, pattern := range []string{consumptionExportFilePattern, consumptionExportRowsPattern} {
+		matches, err := filepath.Glob(filepath.Join(directory, pattern))
+		if err != nil {
+			return 0, err
+		}
+		paths = append(paths, matches...)
 	}
 	deleted := 0
 	for _, path := range paths {

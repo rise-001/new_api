@@ -24,11 +24,15 @@ type xlsxColumn struct {
 }
 
 type xlsxSheet struct {
-	Name      string
-	Columns   []xlsxColumn
-	Rows      [][]xlsxCell
-	RowCount  int
-	WriteRows func(func([]xlsxCell) error) error
+	Name    string
+	Columns []xlsxColumn
+	Rows    [][]xlsxCell
+	// RawRows carries worksheet rows that were already rendered by an
+	// xlsxRowWriter, so detail sheets built during a single database pass can
+	// be copied into the workbook without being re-read or buffered in memory.
+	// RowCount must match the number of rows it contains.
+	RawRows  io.Reader
+	RowCount int
 }
 
 func textCell(value string) xlsxCell {
@@ -114,7 +118,7 @@ func writeWorksheetXML(writer io.Writer, sheet xlsxSheet) error {
 	content.writeString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
 	lastColumn := columnName(len(sheet.Columns))
 	rowCount := len(sheet.Rows)
-	if sheet.WriteRows != nil {
+	if sheet.RawRows != nil {
 		rowCount = sheet.RowCount
 	}
 	lastRow := rowCount + 1
@@ -139,40 +143,14 @@ func writeWorksheetXML(writer io.Writer, sheet xlsxSheet) error {
 		appendStringCell(content, columnName(index+1)+"1", column.Header, 1)
 	}
 	content.writeString(`</row>`)
-	rowIndex := 0
-	writeRow := func(row []xlsxCell) error {
-		excelRow := rowIndex + 2
-		content.writeString(`<row r="`)
-		content.writeString(strconv.Itoa(excelRow))
-		content.writeString(`">`)
-		for columnIndex, cell := range row {
-			if columnIndex >= len(sheet.Columns) {
-				break
-			}
-			reference := columnName(columnIndex+1) + strconv.Itoa(excelRow)
-			if cell.Number != nil {
-				appendNumberCell(content, reference, *cell.Number, cell.Style)
-				continue
-			}
-			appendStringCell(content, reference, cell.Text, cell.Style)
-		}
-		content.writeString(`</row>`)
-		rowIndex++
-		return content.err
-	}
-	if sheet.WriteRows != nil {
-		if err := sheet.WriteRows(writeRow); err != nil {
-			return err
+	if sheet.RawRows != nil {
+		if content.err == nil {
+			_, content.err = io.Copy(buffer, sheet.RawRows)
 		}
 	} else {
-		for _, row := range sheet.Rows {
-			if err := writeRow(row); err != nil {
-				return err
-			}
+		for index, row := range sheet.Rows {
+			appendXLSXRow(content, index+2, len(sheet.Columns), row)
 		}
-	}
-	if rowIndex != rowCount {
-		return fmt.Errorf("worksheet %q wrote %d rows, expected %d", sheet.Name, rowIndex, rowCount)
 	}
 	content.writeString(`</sheetData>`)
 	if len(sheet.Columns) > 0 {
@@ -186,6 +164,58 @@ func writeWorksheetXML(writer io.Writer, sheet xlsxSheet) error {
 		return content.err
 	}
 	return buffer.Flush()
+}
+
+// appendXLSXRow renders a single worksheet row at the given Excel row number.
+// excelRow is 1-based and already accounts for the header row.
+func appendXLSXRow(content *xlsxXMLWriter, excelRow int, columns int, row []xlsxCell) {
+	content.writeString(`<row r="`)
+	content.writeString(strconv.Itoa(excelRow))
+	content.writeString(`">`)
+	for columnIndex, cell := range row {
+		if columnIndex >= columns {
+			break
+		}
+		reference := columnName(columnIndex+1) + strconv.Itoa(excelRow)
+		if cell.Number != nil {
+			appendNumberCell(content, reference, *cell.Number, cell.Style)
+			continue
+		}
+		appendStringCell(content, reference, cell.Text, cell.Style)
+	}
+	content.writeString(`</row>`)
+}
+
+// xlsxRowWriter renders worksheet rows straight into an io.Writer so a sheet
+// can be filled while its source data is being read, and assembled into the
+// workbook later. Row numbering starts below the header row.
+type xlsxRowWriter struct {
+	buffer  *bufio.Writer
+	content *xlsxXMLWriter
+	columns int
+	count   int
+}
+
+func newXLSXRowWriter(writer io.Writer, columns int) *xlsxRowWriter {
+	buffer := bufio.NewWriter(writer)
+	return &xlsxRowWriter{buffer: buffer, content: &xlsxXMLWriter{writer: buffer}, columns: columns}
+}
+
+func (writer *xlsxRowWriter) Write(row []xlsxCell) error {
+	writer.count++
+	appendXLSXRow(writer.content, writer.count+1, writer.columns, row)
+	return writer.content.err
+}
+
+func (writer *xlsxRowWriter) Count() int {
+	return writer.count
+}
+
+func (writer *xlsxRowWriter) Flush() error {
+	if writer.content.err != nil {
+		return writer.content.err
+	}
+	return writer.buffer.Flush()
 }
 
 type xlsxXMLWriter struct {

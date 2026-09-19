@@ -490,11 +490,13 @@ go test ./relay/channel/gemini
 - Rsbuild 生产构建通过。
 - 当前环境未安装 Go 工具链，未运行后端 Go 测试。
 
-## 2026-08-26：邀请额度划转记录
+## 2026-08-26：邀请额度划转记录（已被后续版本替代）
+
+> 历史记录：该版本曾将“划转记录”用于展示用户把邀请奖励额度划转到可用额度的操作。自 2026-09-04 起，页面和接口已改为展示管理员增加用户额度的管理日志；本节仅保留用于说明历史实现和数据库兼容背景。
 
 提交：`ae20ef4f feat: add affiliate transfer records`
 
-### 功能说明
+### 历史功能说明
 
 - 用户将邀请额度划转到可用额度后，系统新增一条划转审计日志，记录用户、时间和划转额度。
 - 管理员可从个人板块的“划转记录”入口查看全部用户的邀请额度划转历史。
@@ -502,13 +504,13 @@ go test ./relay/channel/gemini
 - “划转记录”侧栏模块默认开启，也可通过现有个人侧栏模块配置控制入口显示。
 - 页面和固定文案已同步英文、简体中文、繁体中文、法语、日语、俄语和越南语。
 
-### API 与权限
+### 历史 API 与权限
 
 - `GET /api/user/transfer`：分页查询邀请额度划转日志。
 - 查询参数包括 `p`、`page_size`、`username`、`start_timestamp` 和 `end_timestamp`。
 - 接口位于现有 `AdminAuth` 路由组中，仅管理员可以访问；前端路由入口同样要求 `ROLE.ADMIN`。
 
-### 数据存储与一致性
+### 历史数据存储与一致性
 
 - 本次不新增数据库表或字段，划转记录复用日志数据库中的 `logs` 表。
 - 日志类型为 `LogTypeManage`，`content` 固定为 `Affiliate quota transfer`，划转额度同时写入 `quota` 和结构化的 `Other.op.params.quota`。
@@ -516,7 +518,7 @@ go test ./relay/channel/gemini
 - 审计日志在额度划转事务提交成功后写入。日志写入失败会记录系统错误，但不会回滚已经完成的额度划转。
 - 部署后只能记录新发生的划转，既有划转不会自动补录。
 
-### 实现位置
+### 历史实现位置
 
 - `model/user.go`：额度划转事务提交成功后触发审计日志写入。
 - `model/log.go`：创建划转日志，并提供筛选、计数和分页查询。
@@ -527,15 +529,18 @@ go test ./relay/channel/gemini
 - `web/src/features/profile/components/sidebar-modules-card.tsx`：增加“划转记录”模块开关。
 - `web/src/i18n/locales/*.json`：补齐 7 种前端语言文案。
 
-### 升级注意
+### 历史升级注意
 
 同步上游时重点检查 `TransferAffQuotaToQuota` 的事务提交位置、日志表筛选逻辑、用户管理路由组、个人侧栏配置和生成的 `web/src/routeTree.gen.ts`，避免划转成功后漏记日志或放宽查询权限。
 
 ## 2026-09-04：划转记录改为管理员加额度日志
 
+提交：`17b9e931 fix: show manual quota addition records`
+
 ### 变更说明
 
 - “划转记录”不再查询邀请奖励额度划转日志，改为查询管理员通过用户管理执行“增加额度”产生的管理日志。
+- 因此当前页面名称暂时仍为“划转记录”，实际含义是“管理员增加用户额度记录”，不是用户邀请奖励额度划转记录。
 - 列表中的用户名为被增加额度的目标用户，而不是执行操作的管理员；按用户名搜索时同样按目标用户精确匹配。
 - 页面默认查询本地时间当天 `00:00` 至次日 `00:00`，后端采用开始时间包含、结束时间不包含的区间，避免跨日边界重复。
 - 页面仍支持自定义用户名、开始时间、结束时间以及每页 20 条分页查询。
@@ -547,6 +552,7 @@ go test ./relay/channel/gemini
 - 兼容旧版中文 `content` 前缀 `管理员增加用户额度 `；旧日志继续使用日志自身的用户 ID 和用户名作为目标用户。
 - 管理员给自己增加额度时没有 `target_user_id`，查询逻辑会按日志归属识别为本人操作，不会把该管理员给其他用户增加额度的记录混入本人结果。
 - 查询继续支持主日志数据库和 ClickHouse 日志数据库，不新增数据表或迁移。
+- 仅统计 `user.quota_add`（增加额度）日志，不包含扣减额度、覆盖额度或旧的邀请额度划转日志。
 
 ### 实现位置
 
@@ -560,3 +566,52 @@ go test ./relay/channel/gemini
 
 - 后端用例覆盖新版结构化审计日志、旧版中文日志、目标用户名筛选、管理员本人加额度以及结束时间排除边界。
 - 前端用例覆盖默认时间范围为当天零点至次日零点。
+
+### 功能确认
+
+- 当前接口为 `GET /api/user/transfer`，位于 `AdminAuth` 路由组，仅管理员及超级管理员可访问。
+- 当前页面入口位于个人侧栏，页面和侧栏模块名称仍为“划转记录”，说明文字为“管理员增加额度记录”。
+- 列表展示目标用户、审计时间和审计日志写入时的格式化额度；支持目标用户名、开始时间、结束时间和每页 20 条分页。
+
+## 2026-09-19：消费导出改为单遍扫描并补齐复合索引
+
+### 问题
+
+消费导出在反向代理上返回 `504 Gateway Time-out`。原因有两个，都在服务端：
+
+1. `logs` 表没有同时覆盖 `user_id` 和 `created_at` 的索引。导出查询是 `WHERE user_id = ? AND type IN (2,6) AND created_at BETWEEN ? AND ? ORDER BY created_at, id`，优化器只能在 `idx_user_id_id` 和 `idx_created_at_id` 之间二选一：走前者要读该用户全部历史日志并对 `created_at` 做 filesort，且游标分页的每一批都要重做一次；走后者要扫该时间段内全站所有用户的日志再过滤。
+2. 同一批数据被读了两遍以上。先全量扫一遍算令牌、模型和每日汇总，再扫一遍写明细；勾选“每个 API 令牌单独生成一个工作表”时，还要按令牌名各扫一遍。
+
+### 变更说明
+
+- `logs` 表新增复合索引 `idx_user_id_created_at_id`（`user_id`, `created_at`, `id`）。等值定位用户、范围收窄时间、排序顺序与 `ORDER BY` 一致，游标分页变成索引内 seek，消除 filesort 和跨用户扫描。
+- 导出改为单遍扫描：一次遍历同时累加三张汇总表并写出明细行，不再回查数据库。
+- 明细行在扫描过程中直接渲染成工作表 XML，写入每工作表一个临时文件；扫描结束后再组装 ZIP。内存占用与记录数无关。
+- 勾选按令牌分表时，先用一次 `GROUP BY token_name` 聚合查询确定工作表清单和每表行数，因此序号列仍然跨工作表连续，导出内容与改动前一致。
+- 新增上限：按令牌分表时最多 200 个工作表，超出时返回提示要求关闭该选项。此前没有上限，但那种规模本来就必定超时。
+
+### 行为与产物
+
+- 生成的 Excel 内容不变：工作表顺序、名称、列、合计行、序号连续性均与改动前一致。
+- 导出期间的临时文件从 1 个变为 1 个工作簿加每工作表 1 个行文件，全部在响应结束后删除。
+- 导出中若检测到记录数与预先统计不一致（生成期间有新日志写入），仍然报错要求重试，错误信息中增加了工作表名。
+
+### 实现位置
+
+- `model/log.go`：新增 `idx_user_id_created_at_id` 复合索引标签。
+- `model/consumption_export.go`：新增 `CountConsumptionExportLogsByToken` 聚合查询；移除重构后不再使用的 `TokenName` 过滤字段。
+- `service/xlsx_writer.go`：`xlsxSheet` 以 `RawRows`/`RowCount` 接收预渲染的行；新增 `xlsxRowWriter` 与共享的 `appendXLSXRow`。
+- `service/consumption_export.go`：新增 `consumptionExportDetail`/`consumptionExportDetailSheet` 负责在单遍扫描中分流明细行；移除 `consumptionExportDownloadSheets`、`buildStreamingConsumptionDetailSheet` 和 `writeConsumptionExportRecords`。
+
+### 数据库影响
+
+- 仅新增一个索引，不新增表或列，不改写任何数据。
+- ClickHouse 日志库不受影响，它走 `migrateClickHouseLogDB` 自己的建表语句，GORM 索引标签只作用于 SQLite、MySQL 和 PostgreSQL 的 `AutoMigrate`。
+- 索引创建发生在 `InitResources()` 阶段，HTTP 端口尚未监听，表现为启动变慢而不是运行时阻塞。MySQL 5.7+ 为 online DDL 不阻塞读写；PostgreSQL 的普通 `CREATE INDEX` 会阻塞写入；SQLite 为全表锁。若在 PostgreSQL 上且 `logs` 表规模很大，应改为手动执行 `CREATE INDEX CONCURRENTLY` 后再升级。
+- 索引本身会略微增加日志写入开销并占用磁盘（约每行 30–45 字节）。新索引的最左前缀就是 `user_id`，理论上使 `logs.user_id` 单列索引成为冗余，本次不删除。
+
+### 测试与验证
+
+- 重写 `service/consumption_export_test.go`：覆盖单遍扫描下按令牌分表的序号连续性、生成期间记录增减的报错、四种工作表布局、工作簿组装和临时文件清理（含新的行文件）。
+- 原 `TestWriteWorksheetXMLRejectsUnexpectedStreamingRowCount` 保护的“导出期间数据变化”契约已由 `TestConsumptionExportDetailRejectsRecordsAddedAfterPlanning` 和 `TestConsumptionExportDetailFinishRejectsMissingRecords` 在新边界上直接覆盖。
+- 当前本地终端的 PATH 中没有 Go，未能执行 `go build`、`go vet` 和后端回归测试，需要在有 Go 环境的机器上补跑。

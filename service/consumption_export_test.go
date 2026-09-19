@@ -17,6 +17,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// renderConsumptionWorksheet writes a sheet out and asserts the result is
+// well-formed XML, which every worksheet the exporter produces must be for
+// Excel to open the workbook at all.
+func renderConsumptionWorksheet(t *testing.T, sheet xlsxSheet) string {
+	t.Helper()
+	var worksheet bytes.Buffer
+	require.NoError(t, writeWorksheetXML(&worksheet, sheet))
+	decoder := xml.NewDecoder(bytes.NewReader(worksheet.Bytes()))
+	for {
+		_, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+	}
+	return worksheet.String()
+}
+
 func TestConsumptionExportPayloadValidateRejectsInvalidRanges(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -66,12 +84,15 @@ func TestConsumptionExportDownloadCloseRemovesTemporaryFile(t *testing.T) {
 	require.NoError(t, download.Close())
 }
 
-func TestDeleteExpiredConsumptionExportTempFilesOnlyRemovesStaleExports(t *testing.T) {
+func TestDeleteExpiredConsumptionExportTempFilesRemovesStaleWorkbooksAndRowFiles(t *testing.T) {
 	directory := t.TempDir()
-	stale, err := os.CreateTemp(directory, "new-api-consumption-*.xlsx")
+	staleWorkbook, err := os.CreateTemp(directory, consumptionExportFilePattern)
 	require.NoError(t, err)
-	require.NoError(t, stale.Close())
-	recent, err := os.CreateTemp(directory, "new-api-consumption-*.xlsx")
+	require.NoError(t, staleWorkbook.Close())
+	staleRows, err := os.CreateTemp(directory, consumptionExportRowsPattern)
+	require.NoError(t, err)
+	require.NoError(t, staleRows.Close())
+	recent, err := os.CreateTemp(directory, consumptionExportFilePattern)
 	require.NoError(t, err)
 	require.NoError(t, recent.Close())
 	unrelated, err := os.CreateTemp(directory, "other-*.xlsx")
@@ -79,11 +100,15 @@ func TestDeleteExpiredConsumptionExportTempFilesOnlyRemovesStaleExports(t *testi
 	require.NoError(t, unrelated.Close())
 
 	now := time.Now()
-	require.NoError(t, os.Chtimes(stale.Name(), now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
+	for _, stale := range []string{staleWorkbook.Name(), staleRows.Name()} {
+		require.NoError(t, os.Chtimes(stale, now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
+	}
 	deleted, err := deleteExpiredConsumptionExportTempFiles(directory, now.Add(-time.Hour))
 	require.NoError(t, err)
-	assert.Equal(t, 1, deleted)
-	_, err = os.Stat(stale.Name())
+	assert.Equal(t, 2, deleted)
+	_, err = os.Stat(staleWorkbook.Name())
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(staleRows.Name())
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = os.Stat(recent.Name())
 	require.NoError(t, err)
@@ -91,49 +116,127 @@ func TestDeleteExpiredConsumptionExportTempFilesOnlyRemovesStaleExports(t *testi
 	require.NoError(t, err)
 }
 
-func TestBuildStreamingConsumptionDetailSheetWritesRowsAndTotals(t *testing.T) {
-	records := []consumptionExportRecord{
-		{Sequence: 1, UserID: 7, ModelName: "gpt-5", PromptTokens: 100, CompletionTokens: 25, TotalTokens: 125, Quota: 500, Amount: 0.001},
-		{Sequence: 2, UserID: 7, ModelName: "gpt-5", PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25, Quota: -100, Amount: -0.0002},
-	}
-	sheet := buildStreamingConsumptionDetailSheet("消费清单", int64(len(records)), func(write func(consumptionExportRecord) error) error {
-		for _, record := range records {
-			if err := write(record); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+// Records reach the exporter in log order, so rows for different tokens are
+// interleaved. Each token worksheet must still receive only its own rows, and
+// the 序号 column must stay continuous across worksheets in sheet order.
+func TestConsumptionExportDetailNumbersTokenWorksheetsContinuously(t *testing.T) {
+	detail, err := newConsumptionExportDetail(
+		ConsumptionExportPayload{GroupByToken: true},
+		map[string]int64{"alpha": 2, "beta": 1},
+		3,
+	)
+	require.NoError(t, err)
+	defer detail.close(context.Background())
 
-	var worksheet bytes.Buffer
-	require.NoError(t, writeWorksheetXML(&worksheet, sheet))
-	decoder := xml.NewDecoder(bytes.NewReader(worksheet.Bytes()))
-	for {
-		_, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-	}
-	content := worksheet.String()
-	assert.Contains(t, content, `dimension ref="A1:R4"`)
-	assert.Contains(t, content, "gpt-5")
-	assert.Contains(t, content, "合计")
-	assert.Contains(t, content, "0.0008")
+	require.NoError(t, detail.write(consumptionExportRecord{TokenName: "alpha", ModelName: "gpt-5", Quota: 10, Amount: 0.5}))
+	require.NoError(t, detail.write(consumptionExportRecord{TokenName: "beta", ModelName: "gpt-5", Quota: 20, Amount: 0.125}))
+	require.NoError(t, detail.write(consumptionExportRecord{TokenName: "alpha", ModelName: "gpt-5", Quota: 30, Amount: 0.25}))
+
+	sheets, err := detail.finish()
+	require.NoError(t, err)
+	require.Len(t, sheets, 2)
+	assert.Equal(t, "alpha", sheets[0].Name)
+	assert.Equal(t, "beta", sheets[1].Name)
+	assert.Equal(t, 3, sheets[0].RowCount)
+	assert.Equal(t, 2, sheets[1].RowCount)
+
+	alpha := renderConsumptionWorksheet(t, sheets[0])
+	assert.Contains(t, alpha, `dimension ref="A1:R4"`)
+	assert.Contains(t, alpha, `<c r="A2" s="2"><v>1</v></c>`)
+	assert.Contains(t, alpha, `<c r="A3" s="2"><v>2</v></c>`)
+	assert.Contains(t, alpha, `<c r="K4" s="4"><v>40</v></c>`)
+	assert.Contains(t, alpha, `<c r="L4" s="5"><v>0.75</v></c>`)
+
+	beta := renderConsumptionWorksheet(t, sheets[1])
+	assert.Contains(t, beta, `dimension ref="A1:R3"`)
+	assert.Contains(t, beta, `<c r="A2" s="2"><v>3</v></c>`)
+	assert.Contains(t, beta, `<c r="K3" s="4"><v>20</v></c>`)
 }
 
-func TestWriteWorksheetXMLRejectsUnexpectedStreamingRowCount(t *testing.T) {
-	sheet := xlsxSheet{
-		Name:     "消费清单",
-		Columns:  []xlsxColumn{{Header: "序号", Width: 8}},
-		RowCount: 2,
-		WriteRows: func(write func([]xlsxCell) error) error {
-			return write([]xlsxCell{integerCell(1)})
+func TestConsumptionExportDetailRejectsRecordsAddedAfterPlanning(t *testing.T) {
+	detail, err := newConsumptionExportDetail(
+		ConsumptionExportPayload{GroupByToken: true},
+		map[string]int64{"alpha": 1},
+		1,
+	)
+	require.NoError(t, err)
+	defer detail.close(context.Background())
+
+	require.NoError(t, detail.write(consumptionExportRecord{TokenName: "alpha"}))
+	require.ErrorContains(t,
+		detail.write(consumptionExportRecord{TokenName: "alpha"}),
+		"expected 1 records, found at least 2",
+	)
+	require.ErrorContains(t,
+		detail.write(consumptionExportRecord{TokenName: "beta"}),
+		`API token "beta" appeared after the worksheets were planned`,
+	)
+}
+
+func TestConsumptionExportDetailFinishRejectsMissingRecords(t *testing.T) {
+	detail, err := newConsumptionExportDetail(ConsumptionExportPayload{}, nil, 2)
+	require.NoError(t, err)
+	defer detail.close(context.Background())
+
+	require.NoError(t, detail.write(consumptionExportRecord{TokenName: "alpha"}))
+	_, err = detail.finish()
+	require.ErrorContains(t, err, `worksheet "消费清单" expected 2 records, found 1`)
+}
+
+func TestConsumptionExportDetailLayoutsPerPayload(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     ConsumptionExportPayload
+		tokenCounts map[string]int64
+		records     []consumptionExportRecord
+		expected    []string
+	}{
+		{
+			name:     "single detail sheet",
+			records:  []consumptionExportRecord{{TokenName: "alpha"}},
+			expected: []string{"消费清单"},
+		},
+		{
+			name:        "one sheet per token",
+			payload:     ConsumptionExportPayload{GroupByToken: true},
+			tokenCounts: map[string]int64{"beta": 1, "alpha": 1},
+			records:     []consumptionExportRecord{{TokenName: "beta"}, {TokenName: "alpha"}},
+			expected:    []string{"alpha", "beta"},
+		},
+		{
+			name:     "grouped export without tokens",
+			payload:  ConsumptionExportPayload{GroupByToken: true},
+			expected: []string{"消费清单"},
+		},
+		{
+			// The single pass still visits every log row to build the
+			// summaries, so detail records must be dropped rather than fail.
+			name:     "daily summary keeps no detail sheets",
+			payload:  ConsumptionExportPayload{DailySummary: true, GroupByToken: true},
+			records:  []consumptionExportRecord{{TokenName: "alpha"}},
+			expected: []string{},
 		},
 	}
 
-	err := writeWorksheetXML(io.Discard, sheet)
-	require.EqualError(t, err, `worksheet "消费清单" wrote 1 rows, expected 2`)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail, err := newConsumptionExportDetail(test.payload, test.tokenCounts, int64(len(test.records)))
+			require.NoError(t, err)
+			defer detail.close(context.Background())
+
+			for _, record := range test.records {
+				require.NoError(t, detail.write(record))
+			}
+			sheets, err := detail.finish()
+			require.NoError(t, err)
+
+			names := make([]string, 0, len(sheets))
+			for _, sheet := range sheets {
+				names = append(names, sheet.Name)
+			}
+			assert.Equal(t, test.expected, names)
+		})
+	}
 }
 
 func TestBuildTokenSummarySheetAggregatesTokensCountsAndAmounts(t *testing.T) {
@@ -149,9 +252,7 @@ func TestBuildTokenSummarySheetAggregatesTokensCountsAndAmounts(t *testing.T) {
 		},
 	})
 
-	var worksheet bytes.Buffer
-	require.NoError(t, writeWorksheetXML(&worksheet, sheet))
-	content := worksheet.String()
+	content := renderConsumptionWorksheet(t, sheet)
 	assert.Contains(t, content, `dimension ref="A1:K4"`)
 	assert.Contains(t, content, "未命名令牌")
 	assert.Contains(t, content, "api-default")
@@ -162,47 +263,7 @@ func TestBuildTokenSummarySheetAggregatesTokensCountsAndAmounts(t *testing.T) {
 	assert.Contains(t, content, `<c r="K4" s="5"><v>5.75</v></c>`)
 }
 
-func TestConsumptionExportDownloadSheetsIncludesTokenSummaryForEveryLayout(t *testing.T) {
-	tokenStats := map[string]*consumptionTokenStats{
-		"令牌汇总": {TokenName: "令牌汇总", ConsumeCount: 1},
-	}
-	tests := []struct {
-		name     string
-		payload  ConsumptionExportPayload
-		expected []string
-	}{
-		{name: "detail", expected: []string{"令牌汇总", "消费清单", "模型统计"}},
-		{name: "token sheets", payload: ConsumptionExportPayload{GroupByToken: true}, expected: []string{"令牌汇总", "令牌汇总-2", "模型统计"}},
-		{name: "daily summary", payload: ConsumptionExportPayload{DailySummary: true}, expected: []string{"令牌汇总", "每日汇总", "模型统计"}},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			sheets := consumptionExportDownloadSheets(
-				context.Background(), test.payload, model.ConsumptionExportLogQuery{}, 0,
-				tokenStats, map[string]*consumptionExportStats{}, map[string]*consumptionDailyStats{}, time.UTC,
-			)
-			names := make([]string, 0, len(sheets))
-			for _, sheet := range sheets {
-				names = append(names, sheet.Name)
-			}
-			assert.Equal(t, test.expected, names)
-		})
-	}
-}
-
-func TestStreamingConsumptionExportWorkbookIncludesTokenDetailsAndModelSummaries(t *testing.T) {
-	records := []consumptionExportRecord{
-		{
-			Sequence: 1, UserID: 7, Username: "demo", CreatedAt: "2026-08-09 12:00:00", ModelName: "gpt-5",
-			PromptTokens: 100, CompletionTokens: 25, TotalTokens: 125, CacheReadTokens: 10, CacheWriteTokens: 5,
-			Quota: 500, Amount: 0.001, Duration: "1.0s / 0.2s", TokenName: "default", LogType: "消费", Group: "default",
-		},
-		{
-			Sequence: 2, UserID: 7, Username: "demo", CreatedAt: "2026-08-09 12:01:00", ModelName: "gpt-5",
-			Quota: -100, Amount: -0.0002, TokenName: "default", LogType: "退款", Group: "default",
-		},
-	}
+func TestConsumptionExportWorkbookIncludesTokenDetailsAndModelSummaries(t *testing.T) {
 	modelStats := map[string]*consumptionExportStats{
 		"gpt-5": {ModelName: "gpt-5", ConsumeCount: 1, ConsumeAmount: 0.001, RefundCount: 1, RefundAmount: 0.0002},
 	}
@@ -214,15 +275,24 @@ func TestStreamingConsumptionExportWorkbookIncludesTokenDetailsAndModelSummaries
 		},
 	}
 
-	detailSheet := buildStreamingConsumptionDetailSheet("消费清单", int64(len(records)), func(write func(consumptionExportRecord) error) error {
-		for _, record := range records {
-			if err := write(record); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	workbook, err := buildXLSX([]xlsxSheet{buildTokenSummarySheet(tokenStats), detailSheet, buildModelSummarySheet(modelStats)})
+	detail, err := newConsumptionExportDetail(ConsumptionExportPayload{}, nil, 2)
+	require.NoError(t, err)
+	defer detail.close(context.Background())
+	require.NoError(t, detail.write(consumptionExportRecord{
+		UserID: 7, Username: "demo", CreatedAt: "2026-08-09 12:00:00", ModelName: "gpt-5",
+		PromptTokens: 100, CompletionTokens: 25, TotalTokens: 125, CacheReadTokens: 10, CacheWriteTokens: 5,
+		Quota: 500, Amount: 0.001, Duration: "1.0s / 0.2s", TokenName: "default", LogType: "消费", Group: "default",
+	}))
+	require.NoError(t, detail.write(consumptionExportRecord{
+		UserID: 7, Username: "demo", CreatedAt: "2026-08-09 12:01:00", ModelName: "gpt-5",
+		Quota: -100, Amount: -0.0002, TokenName: "default", LogType: "退款", Group: "default",
+	}))
+	detailSheets, err := detail.finish()
+	require.NoError(t, err)
+
+	sheets := append([]xlsxSheet{buildTokenSummarySheet(tokenStats)}, detailSheets...)
+	sheets = append(sheets, buildModelSummarySheet(modelStats))
+	workbook, err := buildXLSX(sheets)
 	require.NoError(t, err)
 	require.NotEmpty(t, workbook)
 
@@ -270,7 +340,7 @@ func TestConsumptionRecordFromRefundLogUsesNegativeNetAmountsAndDetailedTokens(t
 		UserId: 7, Type: model.LogTypeRefund, Quota: 500, PromptTokens: 90, CompletionTokens: 25,
 		Other: `{"input_tokens_total":100,"cache_tokens":10,"cache_creation_tokens_5m":3,"cache_creation_tokens_1h":2}`,
 	}
-	record := consumptionRecordFromLog(log, 1, time.UTC)
+	record := consumptionRecordFromLog(log, time.UTC)
 
 	assert.Equal(t, int64(100), record.PromptTokens)
 	assert.Equal(t, int64(125), record.TotalTokens)
