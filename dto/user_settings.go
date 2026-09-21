@@ -10,6 +10,7 @@ type UserSetting struct {
 	GotifyUrl                        string  `json:"gotify_url,omitempty"`                           // GotifyUrl Gotify服务器地址
 	GotifyToken                      string  `json:"gotify_token,omitempty"`                         // GotifyToken Gotify应用令牌
 	GotifyPriority                   int     `json:"gotify_priority"`                                // GotifyPriority Gotify消息优先级
+	WeComWebhookUrl                  string  `json:"wecom_webhook_url,omitempty"`                    // WeComWebhookUrl 企业微信群机器人webhook地址
 	UpstreamModelUpdateNotifyEnabled bool    `json:"upstream_model_update_notify_enabled,omitempty"` // 是否接收上游模型更新定时检测通知（仅管理员）
 	AcceptUnsetRatioModel            bool    `json:"accept_unset_model_ratio_model,omitempty"`       // AcceptUnsetRatioModel 是否接受未设置价格的模型
 	RecordIpLog                      bool    `json:"record_ip_log"`                                  // 是否记录请求和错误日志IP
@@ -29,4 +30,5 @@ var (
 	NotifyTypeWebhook = "webhook" // Webhook
 	NotifyTypeBark    = "bark"    // Bark 推送
 	NotifyTypeGotify  = "gotify"  // Gotify 推送
+	NotifyTypeWeCom   = "wecom"   // 企业微信群机器人推送
 )

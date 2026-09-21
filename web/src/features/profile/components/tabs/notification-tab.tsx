@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Bell, Loader2, Mail, Server, Webhook } from 'lucide-react'
+import { Bell, Building2, Loader2, Mail, Server, Webhook } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -27,9 +27,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
-import { updateUserSettings } from '../../api'
+import { updateUserSettings, sendTestNotification } from '../../api'
 import {
   DEFAULT_QUOTA_WARNING_THRESHOLD,
   NOTIFICATION_METHODS,
@@ -42,6 +45,7 @@ const NOTIFICATION_ICONS: Record<NotifyType, typeof Mail> = {
   webhook: Webhook,
   bark: Bell,
   gotify: Server,
+  wecom: Building2,
 }
 
 const NOTIFICATION_VALUES = new Set<NotifyType>(
@@ -53,6 +57,17 @@ function normalizeNotifyType(value: unknown): NotifyType {
     NOTIFICATION_VALUES.has(value as NotifyType)
     ? (value as NotifyType)
     : 'email'
+}
+
+/**
+ * Render stored quota units as the amount shown in the configured display
+ * currency (raw units when the site displays tokens), so the threshold input
+ * matches the balance users actually see.
+ */
+function formatThresholdAmount(quotaUnits: number): string {
+  const amount = quotaUnitsToDollars(quotaUnits)
+  if (!Number.isFinite(amount)) return '0'
+  return String(Number(amount.toFixed(6)))
 }
 
 // ============================================================================
@@ -68,6 +83,16 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
   const { t } = useTranslation()
   const isAdmin = (profile?.role ?? 0) >= ROLE.ADMIN
   const [loading, setLoading] = useState(false)
+  const [testing, setTesting] = useState(false)
+  // Subscribing to the currency config keeps the imperative reads below fresh
+  // once the site's currency settings finish loading.
+  const currencyConfig = useSystemConfigStore((state) => state.config.currency)
+  const currencyLabel = getCurrencyLabel()
+  const tokensOnly = getCurrencyDisplay().meta.kind === 'tokens'
+  // Stored as quota units, edited in the display currency.
+  const [thresholdAmount, setThresholdAmount] = useState(() =>
+    formatThresholdAmount(DEFAULT_QUOTA_WARNING_THRESHOLD)
+  )
   const [settings, setSettings] = useState<UserSettings>({
     notify_type: 'email',
     quota_warning_threshold: DEFAULT_QUOTA_WARNING_THRESHOLD,
@@ -78,6 +103,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
     gotify_url: '',
     gotify_token: '',
     gotify_priority: 5,
+    wecom_webhook_url: '',
     accept_unset_model_ratio_model: false,
     record_ip_log: true,
     upstream_model_update_notify_enabled: false,
@@ -94,10 +120,12 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
   useEffect(() => {
     if (profile?.setting) {
       const parsed = parseUserSettings(profile.setting)
+      const threshold =
+        parsed.quota_warning_threshold ?? DEFAULT_QUOTA_WARNING_THRESHOLD
+      setThresholdAmount(formatThresholdAmount(threshold))
       setSettings({
         notify_type: normalizeNotifyType(parsed.notify_type),
-        quota_warning_threshold:
-          parsed.quota_warning_threshold ?? DEFAULT_QUOTA_WARNING_THRESHOLD,
+        quota_warning_threshold: threshold,
         notification_email: parsed.notification_email ?? '',
         webhook_url: parsed.webhook_url ?? '',
         webhook_secret: parsed.webhook_secret ?? '',
@@ -105,6 +133,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
         gotify_url: parsed.gotify_url ?? '',
         gotify_token: parsed.gotify_token ?? '',
         gotify_priority: parsed.gotify_priority ?? 5,
+        wecom_webhook_url: parsed.wecom_webhook_url ?? '',
         accept_unset_model_ratio_model:
           parsed.accept_unset_model_ratio_model || false,
         record_ip_log: parsed.record_ip_log ?? true,
@@ -112,7 +141,8 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
           parsed.upstream_model_update_notify_enabled || false,
       })
     }
-  }, [profile])
+    // currencyConfig re-normalizes the displayed amount after a currency change.
+  }, [profile, currencyConfig])
 
   const handleSave = async () => {
     try {
@@ -129,6 +159,23 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
       toast.error(t('Failed to update settings'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleTestNotify = async () => {
+    try {
+      setTesting(true)
+      const response = await sendTestNotification(settings)
+
+      if (response.success) {
+        toast.success(response.message || t('Test notification sent'))
+      } else {
+        toast.error(response.message || t('Failed to send test notification'))
+      }
+    } catch {
+      toast.error(t('Failed to send test notification'))
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -151,7 +198,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
           variant='outline'
           size='lg'
           spacing={2}
-          className='grid w-full grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3'
+          className='grid w-full grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5'
         >
           {NOTIFICATION_METHODS.map((method) => {
             const Icon = NOTIFICATION_ICONS[method.value]
@@ -173,16 +220,28 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
 
       {/* Warning Threshold */}
       <div className='space-y-1.5'>
-        <Label htmlFor='threshold'>{t('Quota Warning Threshold')}</Label>
+        <Label htmlFor='threshold'>
+          {t('Quota Warning Threshold')} ({currencyLabel})
+        </Label>
         <Input
           id='threshold'
           type='number'
           className='h-9'
-          value={settings.quota_warning_threshold}
-          onChange={(e) =>
-            updateField('quota_warning_threshold', Number(e.target.value))
+          min='0'
+          step={tokensOnly ? '1' : '0.01'}
+          value={thresholdAmount}
+          onChange={(e) => {
+            setThresholdAmount(e.target.value)
+            updateField(
+              'quota_warning_threshold',
+              parseQuotaFromDollars(Number(e.target.value))
+            )
+          }}
+          placeholder={
+            tokensOnly
+              ? t('Enter amount in tokens')
+              : t('Enter amount in {{currency}}', { currency: currencyLabel })
           }
-          placeholder={t('Enter threshold')}
         />
         <p className='text-muted-foreground text-xs'>
           {t('Get notified when balance falls below this value')}
@@ -321,6 +380,26 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
         </>
       )}
 
+      {/* WeCom Settings */}
+      {notifyType === 'wecom' && (
+        <div className='space-y-1.5'>
+          <Label htmlFor='wecomWebhookUrl'>{t('WeCom Bot Webhook URL')}</Label>
+          <Input
+            id='wecomWebhookUrl'
+            type='url'
+            className='h-9'
+            value={settings.wecom_webhook_url}
+            onChange={(e) => updateField('wecom_webhook_url', e.target.value)}
+            placeholder='https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx'
+          />
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Create a group bot in WeCom and paste its webhook address here. Notifications are sent as plain text messages.'
+            )}
+          </p>
+        </div>
+      )}
+
       {/* Divider */}
       <div className='border-t' />
 
@@ -395,8 +474,16 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
       </div>
 
       {/* Save Button */}
-      <div className='flex justify-end'>
-        <Button onClick={handleSave} disabled={loading}>
+      <div className='flex flex-col-reverse gap-2 sm:flex-row sm:justify-end'>
+        <Button
+          variant='outline'
+          onClick={handleTestNotify}
+          disabled={testing || loading}
+        >
+          {testing && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+          {testing ? t('Sending...') : t('Send Test Notification')}
+        </Button>
+        <Button onClick={handleSave} disabled={loading || testing}>
           {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
           {loading ? t('Saving...') : t('Save Settings')}
         </Button>

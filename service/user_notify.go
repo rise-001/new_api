@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -63,6 +64,18 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 		return fmt.Errorf("notification limit exceeded for user %d with type %s", userId, notifyType)
 	}
 
+	return DispatchUserNotify(userId, userEmail, userSetting, data)
+}
+
+// DispatchUserNotify 按用户配置的通知方式发送一条通知，不做按通知类型的频率限制。
+// 额度预警等自动通知请走 NotifyUser；只有用户主动触发、入口自带限流的场景
+// （例如通知设置里的“发送测试通知”）才直接调用这里。
+func DispatchUserNotify(userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
+	notifyType := userSetting.NotifyType
+	if notifyType == "" {
+		notifyType = dto.NotifyTypeEmail
+	}
+
 	switch notifyType {
 	case dto.NotifyTypeEmail:
 		// 优先使用设置中的通知邮箱，如果为空则使用用户的默认邮箱
@@ -100,6 +113,13 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 			return nil
 		}
 		return sendGotifyNotify(gotifyUrl, gotifyToken, userSetting.GotifyPriority, data)
+	case dto.NotifyTypeWeCom:
+		weComUrl := userSetting.WeComWebhookUrl
+		if weComUrl == "" {
+			common.SysLog(fmt.Sprintf("user %d has no wecom webhook url, skip sending wecom", userId))
+			return nil
+		}
+		return sendWeComNotify(weComUrl, data)
 	}
 	return nil
 }
@@ -272,6 +292,99 @@ func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data d
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return fmt.Errorf("gotify request failed with status code: %d", resp.StatusCode)
 		}
+	}
+
+	return nil
+}
+
+func sendWeComNotify(webhookUrl string, data dto.Notify) error {
+	// 处理占位符
+	content := data.Content
+	for _, value := range data.Values {
+		content = strings.Replace(content, dto.ContentValueParam, fmt.Sprintf("%v", value), 1)
+	}
+
+	// 企业微信群机器人文本消息不渲染 HTML，标题与正文合并为纯文本
+	message := content
+	if data.Title != "" {
+		message = data.Title + "\n" + content
+	}
+
+	type WeComTextContent struct {
+		Content string `json:"content"`
+	}
+	type WeComMessage struct {
+		MsgType string           `json:"msgtype"`
+		Text    WeComTextContent `json:"text"`
+	}
+
+	payloadBytes, err := common.Marshal(WeComMessage{
+		MsgType: "text",
+		Text:    WeComTextContent{Content: message},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal wecom payload: %v", err)
+	}
+
+	var req *http.Request
+	var resp *http.Response
+
+	if system_setting.EnableWorker() {
+		// 使用worker发送请求
+		workerReq := &WorkerRequest{
+			URL:    webhookUrl,
+			Key:    system_setting.WorkerValidKey,
+			Method: http.MethodPost,
+			Headers: map[string]string{
+				"Content-Type": "application/json; charset=utf-8",
+				"User-Agent":   "NewAPI-WeCom-Notify/1.0",
+			},
+			Body: payloadBytes,
+		}
+
+		resp, err = DoWorkerRequest(workerReq)
+		if err != nil {
+			return fmt.Errorf("failed to send wecom request through worker: %v", err)
+		}
+	} else {
+		// SSRF防护：验证企业微信Webhook地址（非Worker模式）
+		if err := ValidateSSRFProtectedFetchURL(webhookUrl); err != nil {
+			return fmt.Errorf("request reject: %v", err)
+		}
+
+		req, err = http.NewRequest(http.MethodPost, webhookUrl, bytes.NewBuffer(payloadBytes))
+		if err != nil {
+			return fmt.Errorf("failed to create wecom request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		req.Header.Set("User-Agent", "NewAPI-WeCom-Notify/1.0")
+
+		client := GetSSRFProtectedHTTPClient()
+		resp, err = client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to send wecom request: %v", err)
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("wecom request failed with status code: %d", resp.StatusCode)
+	}
+
+	// 企业微信在业务失败时同样返回 200，必须读取 errcode 才知道消息是否真的发出去了
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read wecom response: %v", err)
+	}
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := common.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse wecom response: %v", err)
+	}
+	if result.ErrCode != 0 {
+		return fmt.Errorf("wecom request failed: errcode %d, errmsg %s", result.ErrCode, result.ErrMsg)
 	}
 
 	return nil

@@ -986,27 +986,6 @@ func DeleteUser(c *gin.Context) {
 	return
 }
 
-func DeleteSelf(c *gin.Context) {
-	id := c.GetInt("id")
-	user, _ := model.GetUserById(id, false)
-
-	if user.Role == common.RoleRootUser {
-		common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
-		return
-	}
-
-	err := model.DeleteUserById(id)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
-	return
-}
-
 func CreateUser(c *gin.Context) {
 	var user model.User
 	err := common.DecodeJson(c.Request.Body, &user)
@@ -1402,9 +1381,136 @@ type UpdateUserSettingRequest struct {
 	GotifyUrl                        string  `json:"gotify_url,omitempty"`
 	GotifyToken                      string  `json:"gotify_token,omitempty"`
 	GotifyPriority                   int     `json:"gotify_priority,omitempty"`
+	WeComWebhookUrl                  string  `json:"wecom_webhook_url,omitempty"`
 	UpstreamModelUpdateNotifyEnabled *bool   `json:"upstream_model_update_notify_enabled,omitempty"`
 	AcceptUnsetModelRatioModel       bool    `json:"accept_unset_model_ratio_model"`
 	RecordIpLog                      *bool   `json:"record_ip_log"`
+}
+
+// validateUserSettingRequest 校验通知设置请求，校验失败时已经写出错误响应并返回 false。
+// 保存设置和发送测试通知共用同一套校验，避免两条入口的规则漂移。
+func validateUserSettingRequest(c *gin.Context, req *UpdateUserSettingRequest) bool {
+	// 验证预警类型
+	if req.QuotaWarningType != dto.NotifyTypeEmail && req.QuotaWarningType != dto.NotifyTypeWebhook && req.QuotaWarningType != dto.NotifyTypeBark && req.QuotaWarningType != dto.NotifyTypeGotify && req.QuotaWarningType != dto.NotifyTypeWeCom {
+		common.ApiErrorI18n(c, i18n.MsgSettingInvalidType)
+		return false
+	}
+
+	// 验证预警阈值
+	if req.QuotaWarningThreshold <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgQuotaThresholdGtZero)
+		return false
+	}
+
+	// 如果是webhook类型,验证webhook地址
+	if req.QuotaWarningType == dto.NotifyTypeWebhook {
+		if req.WebhookUrl == "" {
+			common.ApiErrorI18n(c, i18n.MsgSettingWebhookEmpty)
+			return false
+		}
+		// 验证URL格式
+		if _, err := url.ParseRequestURI(req.WebhookUrl); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgSettingWebhookInvalid)
+			return false
+		}
+	}
+
+	// 如果是邮件类型，验证邮箱地址
+	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
+		// 验证邮箱格式
+		if !strings.Contains(req.NotificationEmail, "@") {
+			common.ApiErrorI18n(c, i18n.MsgSettingEmailInvalid)
+			return false
+		}
+	}
+
+	// 如果是Bark类型，验证Bark URL
+	if req.QuotaWarningType == dto.NotifyTypeBark {
+		if req.BarkUrl == "" {
+			common.ApiErrorI18n(c, i18n.MsgSettingBarkUrlEmpty)
+			return false
+		}
+		// 验证URL格式
+		if _, err := url.ParseRequestURI(req.BarkUrl); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgSettingBarkUrlInvalid)
+			return false
+		}
+		// 检查是否是HTTP或HTTPS
+		if !strings.HasPrefix(req.BarkUrl, "https://") && !strings.HasPrefix(req.BarkUrl, "http://") {
+			common.ApiErrorI18n(c, i18n.MsgSettingUrlMustHttp)
+			return false
+		}
+	}
+
+	// 如果是Gotify类型，验证Gotify URL和Token
+	if req.QuotaWarningType == dto.NotifyTypeGotify {
+		if req.GotifyUrl == "" {
+			common.ApiErrorI18n(c, i18n.MsgSettingGotifyUrlEmpty)
+			return false
+		}
+		if req.GotifyToken == "" {
+			common.ApiErrorI18n(c, i18n.MsgSettingGotifyTokenEmpty)
+			return false
+		}
+		// 验证URL格式
+		if _, err := url.ParseRequestURI(req.GotifyUrl); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgSettingGotifyUrlInvalid)
+			return false
+		}
+		// 检查是否是HTTP或HTTPS
+		if !strings.HasPrefix(req.GotifyUrl, "https://") && !strings.HasPrefix(req.GotifyUrl, "http://") {
+			common.ApiErrorI18n(c, i18n.MsgSettingUrlMustHttp)
+			return false
+		}
+	}
+
+	// 如果是企业微信类型，验证群机器人Webhook地址
+	if req.QuotaWarningType == dto.NotifyTypeWeCom {
+		if req.WeComWebhookUrl == "" {
+			common.ApiErrorI18n(c, i18n.MsgSettingWeComUrlEmpty)
+			return false
+		}
+		// 验证URL格式
+		if _, err := url.ParseRequestURI(req.WeComWebhookUrl); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgSettingWeComUrlInvalid)
+			return false
+		}
+		// 检查是否是HTTP或HTTPS
+		if !strings.HasPrefix(req.WeComWebhookUrl, "https://") && !strings.HasPrefix(req.WeComWebhookUrl, "http://") {
+			common.ApiErrorI18n(c, i18n.MsgSettingUrlMustHttp)
+			return false
+		}
+	}
+
+	return true
+}
+
+// applyNotifySettings 把请求中与当前通知方式对应的字段写入用户设置。
+func applyNotifySettings(settings *dto.UserSetting, req *UpdateUserSettingRequest) {
+	switch req.QuotaWarningType {
+	case dto.NotifyTypeWebhook:
+		settings.WebhookUrl = req.WebhookUrl
+		if req.WebhookSecret != "" {
+			settings.WebhookSecret = req.WebhookSecret
+		}
+	case dto.NotifyTypeEmail:
+		if req.NotificationEmail != "" {
+			settings.NotificationEmail = req.NotificationEmail
+		}
+	case dto.NotifyTypeBark:
+		settings.BarkUrl = req.BarkUrl
+	case dto.NotifyTypeGotify:
+		settings.GotifyUrl = req.GotifyUrl
+		settings.GotifyToken = req.GotifyToken
+		// Gotify优先级范围0-10，超出范围则使用默认值5
+		if req.GotifyPriority < 0 || req.GotifyPriority > 10 {
+			settings.GotifyPriority = 5
+		} else {
+			settings.GotifyPriority = req.GotifyPriority
+		}
+	case dto.NotifyTypeWeCom:
+		settings.WeComWebhookUrl = req.WeComWebhookUrl
+	}
 }
 
 func UpdateUserSetting(c *gin.Context) {
@@ -1414,78 +1520,8 @@ func UpdateUserSetting(c *gin.Context) {
 		return
 	}
 
-	// 验证预警类型
-	if req.QuotaWarningType != dto.NotifyTypeEmail && req.QuotaWarningType != dto.NotifyTypeWebhook && req.QuotaWarningType != dto.NotifyTypeBark && req.QuotaWarningType != dto.NotifyTypeGotify {
-		common.ApiErrorI18n(c, i18n.MsgSettingInvalidType)
+	if !validateUserSettingRequest(c, &req) {
 		return
-	}
-
-	// 验证预警阈值
-	if req.QuotaWarningThreshold <= 0 {
-		common.ApiErrorI18n(c, i18n.MsgQuotaThresholdGtZero)
-		return
-	}
-
-	// 如果是webhook类型,验证webhook地址
-	if req.QuotaWarningType == dto.NotifyTypeWebhook {
-		if req.WebhookUrl == "" {
-			common.ApiErrorI18n(c, i18n.MsgSettingWebhookEmpty)
-			return
-		}
-		// 验证URL格式
-		if _, err := url.ParseRequestURI(req.WebhookUrl); err != nil {
-			common.ApiErrorI18n(c, i18n.MsgSettingWebhookInvalid)
-			return
-		}
-	}
-
-	// 如果是邮件类型，验证邮箱地址
-	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
-		// 验证邮箱格式
-		if !strings.Contains(req.NotificationEmail, "@") {
-			common.ApiErrorI18n(c, i18n.MsgSettingEmailInvalid)
-			return
-		}
-	}
-
-	// 如果是Bark类型，验证Bark URL
-	if req.QuotaWarningType == dto.NotifyTypeBark {
-		if req.BarkUrl == "" {
-			common.ApiErrorI18n(c, i18n.MsgSettingBarkUrlEmpty)
-			return
-		}
-		// 验证URL格式
-		if _, err := url.ParseRequestURI(req.BarkUrl); err != nil {
-			common.ApiErrorI18n(c, i18n.MsgSettingBarkUrlInvalid)
-			return
-		}
-		// 检查是否是HTTP或HTTPS
-		if !strings.HasPrefix(req.BarkUrl, "https://") && !strings.HasPrefix(req.BarkUrl, "http://") {
-			common.ApiErrorI18n(c, i18n.MsgSettingUrlMustHttp)
-			return
-		}
-	}
-
-	// 如果是Gotify类型，验证Gotify URL和Token
-	if req.QuotaWarningType == dto.NotifyTypeGotify {
-		if req.GotifyUrl == "" {
-			common.ApiErrorI18n(c, i18n.MsgSettingGotifyUrlEmpty)
-			return
-		}
-		if req.GotifyToken == "" {
-			common.ApiErrorI18n(c, i18n.MsgSettingGotifyTokenEmpty)
-			return
-		}
-		// 验证URL格式
-		if _, err := url.ParseRequestURI(req.GotifyUrl); err != nil {
-			common.ApiErrorI18n(c, i18n.MsgSettingGotifyUrlInvalid)
-			return
-		}
-		// 检查是否是HTTP或HTTPS
-		if !strings.HasPrefix(req.GotifyUrl, "https://") && !strings.HasPrefix(req.GotifyUrl, "http://") {
-			common.ApiErrorI18n(c, i18n.MsgSettingUrlMustHttp)
-			return
-		}
 	}
 
 	userId := c.GetInt("id")
@@ -1512,36 +1548,7 @@ func UpdateUserSetting(c *gin.Context) {
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      recordIpLog,
 	}
-
-	// 如果是webhook类型,添加webhook相关设置
-	if req.QuotaWarningType == dto.NotifyTypeWebhook {
-		settings.WebhookUrl = req.WebhookUrl
-		if req.WebhookSecret != "" {
-			settings.WebhookSecret = req.WebhookSecret
-		}
-	}
-
-	// 如果提供了通知邮箱，添加到设置中
-	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
-		settings.NotificationEmail = req.NotificationEmail
-	}
-
-	// 如果是Bark类型，添加Bark URL到设置中
-	if req.QuotaWarningType == dto.NotifyTypeBark {
-		settings.BarkUrl = req.BarkUrl
-	}
-
-	// 如果是Gotify类型，添加Gotify配置到设置中
-	if req.QuotaWarningType == dto.NotifyTypeGotify {
-		settings.GotifyUrl = req.GotifyUrl
-		settings.GotifyToken = req.GotifyToken
-		// Gotify优先级范围0-10，超出范围则使用默认值5
-		if req.GotifyPriority < 0 || req.GotifyPriority > 10 {
-			settings.GotifyPriority = 5
-		} else {
-			settings.GotifyPriority = req.GotifyPriority
-		}
-	}
+	applyNotifySettings(&settings, &req)
 
 	// 更新用户设置
 	if err := model.UpdateUserSetting(user.Id, settings); err != nil {
@@ -1550,4 +1557,43 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	common.ApiSuccessI18n(c, i18n.MsgSettingSaved, nil)
+}
+
+// TestUserSettingNotify 用请求里的通知配置立刻发一条测试通知，不写库。
+// 这样用户可以在保存之前确认 webhook / 机器人地址是否真的能收到消息。
+func TestUserSettingNotify(c *gin.Context) {
+	var req UpdateUserSettingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	if !validateUserSettingRequest(c, &req) {
+		return
+	}
+
+	userId := c.GetInt("id")
+	user, err := model.GetUserById(userId, true)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	settings := dto.UserSetting{NotifyType: req.QuotaWarningType}
+	applyNotifySettings(&settings, &req)
+
+	// 邮件方式会回落到账户邮箱，两者都为空时发送逻辑只会静默跳过，这里提前告诉用户
+	if settings.NotifyType == dto.NotifyTypeEmail && settings.NotificationEmail == "" && user.Email == "" {
+		common.ApiErrorI18n(c, i18n.MsgSettingTestNoEmail)
+		return
+	}
+
+	title := common.TranslateMessage(c, i18n.MsgSettingTestNotifyTitle)
+	content := common.TranslateMessage(c, i18n.MsgSettingTestNotifyContent)
+	if err := service.DispatchUserNotify(user.Id, user.Email, settings, dto.NewNotify(dto.NotifyTypeTest, title, content, nil)); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgSettingTestFailed, map[string]any{"Error": err.Error()})
+		return
+	}
+
+	common.ApiSuccessI18n(c, i18n.MsgSettingTestSent, nil)
 }

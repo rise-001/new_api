@@ -32,6 +32,7 @@ import {
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 type SidebarModuleConfig = {
@@ -54,6 +55,10 @@ export function SidebarModulesCard() {
   const [config, setConfig] = useState<SidebarModulesConfig>({})
   const currentUser = useAuthStore((s) => s.auth.user)
   const setUser = useAuthStore((s) => s.auth.setUser)
+  // The Transfer Records sidebar entry is admin-only (ROLE.ADMIN in
+  // use-sidebar-data), so regular users would see a toggle for an entry they
+  // can never have.
+  const isAdmin = (currentUser?.role ?? ROLE.GUEST) >= ROLE.ADMIN
 
   const sectionDefs: SectionDef[] = [
     {
@@ -125,11 +130,15 @@ export function SidebarModulesCard() {
           title: t('Personal Settings'),
           description: t('Personal info settings'),
         },
-        {
-          key: 'transfer',
-          title: t('Transfer Records'),
-          description: t('Manual quota addition history'),
-        },
+        ...(isAdmin
+          ? [
+              {
+                key: 'transfer',
+                title: t('Transfer Records'),
+                description: t('Manual quota addition history'),
+              },
+            ]
+          : []),
       ],
     },
   ]

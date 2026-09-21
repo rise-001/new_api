@@ -86,7 +86,7 @@ export interface UserProfile {
 /**
  * Notification type
  */
-export type NotifyType = 'email' | 'webhook' | 'bark' | 'gotify'
+export type NotifyType = 'email' | 'webhook' | 'bark' | 'gotify' | 'wecom'
 
 /**
  * Parsed user settings
@@ -110,6 +110,8 @@ export interface UserSettings {
   gotify_token?: string
   /** Gotify message priority (0-10) */
   gotify_priority?: number
+  /** WeCom group bot webhook URL */
+  wecom_webhook_url?: string
   /** Accept unset model ratio model */
   accept_unset_model_ratio_model?: boolean
   /** Record IP log */
@@ -142,16 +144,10 @@ export interface UpdateUserSettingsRequest {
   gotify_url?: string
   gotify_token?: string
   gotify_priority?: number
+  wecom_webhook_url?: string
   accept_unset_model_ratio_model?: boolean
   record_ip_log?: boolean
   upstream_model_update_notify_enabled?: boolean
-}
-
-/**
- * Account deletion request
- */
-export interface DeleteAccountRequest {
-  password?: string
 }
 
 /**

@@ -240,17 +240,24 @@ const (
 
 // Setting related messages
 const (
-	MsgSettingInvalidType      = "setting.invalid_type"
-	MsgSettingWebhookEmpty     = "setting.webhook_empty"
-	MsgSettingWebhookInvalid   = "setting.webhook_invalid"
-	MsgSettingEmailInvalid     = "setting.email_invalid"
-	MsgSettingBarkUrlEmpty     = "setting.bark_url_empty"
-	MsgSettingBarkUrlInvalid   = "setting.bark_url_invalid"
-	MsgSettingGotifyUrlEmpty   = "setting.gotify_url_empty"
-	MsgSettingGotifyTokenEmpty = "setting.gotify_token_empty"
-	MsgSettingGotifyUrlInvalid = "setting.gotify_url_invalid"
-	MsgSettingUrlMustHttp      = "setting.url_must_http"
-	MsgSettingSaved            = "setting.saved"
+	MsgSettingInvalidType       = "setting.invalid_type"
+	MsgSettingWebhookEmpty      = "setting.webhook_empty"
+	MsgSettingWebhookInvalid    = "setting.webhook_invalid"
+	MsgSettingEmailInvalid      = "setting.email_invalid"
+	MsgSettingBarkUrlEmpty      = "setting.bark_url_empty"
+	MsgSettingBarkUrlInvalid    = "setting.bark_url_invalid"
+	MsgSettingGotifyUrlEmpty    = "setting.gotify_url_empty"
+	MsgSettingGotifyTokenEmpty  = "setting.gotify_token_empty"
+	MsgSettingGotifyUrlInvalid  = "setting.gotify_url_invalid"
+	MsgSettingWeComUrlEmpty     = "setting.wecom_url_empty"
+	MsgSettingWeComUrlInvalid   = "setting.wecom_url_invalid"
+	MsgSettingUrlMustHttp       = "setting.url_must_http"
+	MsgSettingTestSent          = "setting.test_sent"
+	MsgSettingTestFailed        = "setting.test_failed"
+	MsgSettingTestNoEmail       = "setting.test_no_email"
+	MsgSettingTestNotifyTitle   = "setting.test_notify_title"
+	MsgSettingTestNotifyContent = "setting.test_notify_content"
+	MsgSettingSaved             = "setting.saved"
 )
 
 // Deployment related messages (io.net)

@@ -572,6 +572,7 @@ go test ./relay/channel/gemini
 - 当前接口为 `GET /api/user/transfer`，位于 `AdminAuth` 路由组，仅管理员及超级管理员可访问。
 - 当前页面入口位于个人侧栏，页面和侧栏模块名称仍为“划转记录”，说明文字为“管理员增加额度记录”。
 - 列表展示目标用户、审计时间和审计日志写入时的格式化额度；支持目标用户名、开始时间、结束时间和每页 20 条分页。
+- 个人设置「侧栏个性化」中的“划转记录”模块开关仅对管理员及超级管理员显示，详见下面 2026-09-21 的条目。
 
 ## 2026-09-19：消费导出改为单遍扫描并补齐复合索引
 
@@ -615,3 +616,111 @@ go test ./relay/channel/gemini
 - 重写 `service/consumption_export_test.go`：覆盖单遍扫描下按令牌分表的序号连续性、生成期间记录增减的报错、四种工作表布局、工作簿组装和临时文件清理（含新的行文件）。
 - 原 `TestWriteWorksheetXMLRejectsUnexpectedStreamingRowCount` 保护的“导出期间数据变化”契约已由 `TestConsumptionExportDetailRejectsRecordsAddedAfterPlanning` 和 `TestConsumptionExportDetailFinishRejectsMissingRecords` 在新边界上直接覆盖。
 - 当前本地终端的 PATH 中没有 Go，未能执行 `go build`、`go vet` 和后端回归测试，需要在有 Go 环境的机器上补跑。
+
+## 2026-09-21：划转记录侧栏开关仅管理员可见
+
+### 变更说明
+
+- 个人设置「侧栏个性化」的“个人中心区域”里，“划转记录”模块开关只对管理员及超级管理员渲染。
+- 原因：侧栏入口本身带 `requiredRole: ROLE.ADMIN`（`web/src/hooks/use-sidebar-data.ts`），普通用户永远看不到该入口，这个开关对他们是无效 UI。
+- 普通用户点击“恢复默认”时保存的配置不含 `transfer` 键；`use-sidebar-config.ts` 中缺失的模块键按可见处理，所以日后升级为管理员不会被历史配置挡住入口。
+
+### 实现位置
+
+- `web/src/features/profile/components/sidebar-modules-card.tsx`：按 `auth.user.role >= ROLE.ADMIN` 条件拼接 `transfer` 模块项。
+
+## 2026-09-21：取消用户自助删除账户
+
+### 变更说明
+
+- 个人设置「安全」卡片不再提供“删除账户”入口，安全操作只剩“修改密码”和“访问令牌”，卡片栅格从三列改为两列。
+- 删除 `DELETE /api/user/self` 路由和 `controller.DeleteSelf`，用户绕过界面直接调用该接口会得到 404，无法再自助注销账号。
+- 管理员删除用户的能力不变，仍然走 `DELETE /api/user/:id`（`controller.DeleteUser`），根用户仍受 `i18n.MsgUserCannotDeleteRootUser` 保护。
+
+### 实现位置
+
+- `web/src/features/profile/components/profile-security-card.tsx`：移除删除账户动作、对话框挂载和 `Trash2` 图标。
+- `web/src/features/profile/components/dialogs/delete-account-dialog.tsx`：删除该组件。
+- `web/src/features/profile/api.ts`、`web/src/features/profile/types.ts`：移除 `deleteUserAccount` 和 `DeleteAccountRequest`。
+- `router/api-router.go`、`controller/user.go`：移除自助删除路由与处理函数。
+
+### 遗留说明
+
+- 各语言 locale 文件中“删除账户”相关的翻译键未删除，未被引用不影响运行；其中 `Delete Account` 等文案也可能被后续功能复用。
+- 当前本地终端没有 Go 和前端依赖（`web/node_modules` 缺少 typescript/oxlint），未能执行 `go build` 和前端 typecheck/lint，需要在完整环境补跑。
+
+## 2026-09-21：配额警告阈值按展示货币输入
+
+### 变更说明
+
+- 个人设置「通知」里的“配额警告阈值”原来直接显示和编辑原始额度单位（默认 `500000`，显示为 100000 之类的裸数字），现在改为按站点展示货币输入，例如 `USD` 下填 `0.2`。
+- 标签后追加当前货币标识（`USD` / `CNY` / 自定义符号 / `Tokens`），占位符复用 `Enter amount in {{currency}}` 和 `Enter amount in tokens`。
+- 提交给后端的 `quota_warning_threshold` 仍是原始额度单位，由 `parseQuotaFromDollars` 换算，`service/quota.go` 的比较逻辑和后端 `> 0` 校验不变。
+- 站点设置为 Tokens 展示时，`quotaUnitsToDollars` 与 `parseQuotaFromDollars` 均为恒等变换，界面与改动前一致。
+
+### 实现位置
+
+- `web/src/features/profile/components/tabs/notification-tab.tsx`：新增 `formatThresholdAmount`，输入框改为展示货币金额的受控字符串，订阅 `useSystemConfigStore` 的 `config.currency` 以便货币配置加载后重新归一化。
+
+### 遗留说明
+
+- 系统设置里的全局默认值 `QuotaRemindThreshold`（`web/src/features/system-settings/integrations/monitoring-settings-section.tsx`）仍是原始额度单位，本次未改。
+- locale 中的 `Enter threshold` 键不再被引用，未删除。
+
+## 2026-09-21：新增企业微信群机器人通知
+
+### 变更说明
+
+- 个人设置「通知」的通知方式增加“企业微信”，与邮箱、Webhook、Bark、Gotify 并列，选中后填写群机器人 Webhook 地址即可。
+- 采用群机器人 Webhook 方式（`https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...`），不涉及 corpid/corpsecret/agentid，也不需要维护 access_token。
+- 消息体为文本消息 `{"msgtype":"text","text":{"content":"标题\n正文"}}`。企业微信文本消息不渲染 HTML，因此额度预警内容改用纯文本，充值链接以裸 URL 附在末尾（企业微信客户端会自动识别为链接）。
+- 企业微信业务失败时仍返回 HTTP 200，发送逻辑会读取响应体的 `errcode`，非 0 时返回错误，避免把失败当成功。
+- 与 Bark/Gotify 一致：Worker 模式走 `DoWorkerRequest`，非 Worker 模式先过 `ValidateSSRFProtectedFetchURL` 再用受 SSRF 保护的 HTTP 客户端发送。
+
+### 实现位置
+
+- `dto/user_settings.go`：新增 `NotifyTypeWeCom` 与 `WeComWebhookUrl` 字段（存在用户 `setting` JSON 中，不新增数据库列）。
+- `controller/user.go`：`UpdateUserSettingRequest` 接收 `wecom_webhook_url`，校验非空、URL 格式和 http(s) 前缀，并在通知方式为企业微信时落库。
+- `service/user_notify.go`：新增 `sendWeComNotify`，`NotifyUser` 增加企业微信分支。
+- `service/quota.go`：额度预警和订阅额度预警各增加一个企业微信纯文本分支。
+- `i18n/keys.go`、`i18n/locales/*.yaml`：新增 `setting.wecom_url_empty`、`setting.wecom_url_invalid`。
+- `web/src/features/profile/constants.ts`、`types.ts`、`components/tabs/notification-tab.tsx`：通知方式选项、类型、表单字段和图标；选项栅格由 4 列改为 `sm:3 / lg:5`。
+- `web/src/i18n/locales/*.json`：7 种语言新增 `WeCom`、`WeCom Bot Webhook URL` 和说明文案。
+
+### 同步上游注意
+
+- `dto/user_settings.go`、`controller/user.go` 的设置校验段、`service/user_notify.go`、`service/quota.go` 的通知分支都是上游文件，合并上游时如果上游自己新增通知方式，这几处需要人工合并。
+
+### 待验证
+
+- 本机没有 Go 和前端依赖，`go build`、`go vet` 和前端 typecheck/lint 未执行。
+- 真实企业微信群机器人地址未做端到端发送验证，需要在部署环境用一个群机器人 key 实测一次。
+
+## 2026-09-21：通知设置增加“发送测试通知”
+
+### 变更说明
+
+- 个人设置「通知」底部在“保存设置”旁边增加“发送测试通知”按钮。
+- 测试用的是当前表单里的配置，不写库，因此可以先测通再保存；两条入口共用同一套校验，规则不会漂移。
+- 新增接口 `POST /api/user/setting/test`，位于 `UserAuth` 自助路由组并挂 `CriticalRateLimit`（默认 20 次 / 20 分钟）。
+- 测试通知走 `service.DispatchUserNotify`，跳过按通知类型的频率限制（默认 2 条 / 10 分钟，那是给额度预警这类自动通知用的），避免用户连点两次就被挡。滥用由路由上的 `CriticalRateLimit` 兜底。
+- 邮件方式在通知邮箱和账户邮箱都为空时，发送逻辑本来会静默跳过，接口改为直接返回 `setting.test_no_email`，不会假装发送成功。
+- 通知标题和正文通过后端 i18n 输出，跟随请求语言（en / zh-CN / zh-TW）。
+
+### 实现位置
+
+- `controller/user.go`：抽出 `validateUserSettingRequest` 和 `applyNotifySettings`，`UpdateUserSetting` 改为复用；新增 `TestUserSettingNotify`。
+- `service/user_notify.go`：拆出 `DispatchUserNotify`（不限流的发送路径），`NotifyUser` = 频率限制 + 该函数。
+- `dto/notify.go`：新增 `NotifyTypeTest`。
+- `router/api-router.go`：注册 `POST /api/user/setting/test`。
+- `i18n/keys.go`、`i18n/locales/*.yaml`：新增 `setting.test_sent`、`setting.test_failed`、`setting.test_no_email`、`setting.test_notify_title`、`setting.test_notify_content`。
+- `web/src/features/profile/api.ts`、`components/tabs/notification-tab.tsx`：新增 `sendTestNotification` 与按钮、独立的 loading 状态。
+- `web/src/i18n/locales/*.json`：7 种语言新增 `Send Test Notification`、`Test notification sent`、`Failed to send test notification`。
+
+### 回归覆盖
+
+- `controller/user_setting_notify_test.go`：覆盖 `applyNotifySettings` 只写入当前选中通知方式的字段（避免把上一个渠道的地址/密钥带进设置）、Gotify 优先级越界回落到 5、企业微信 Webhook 地址的空值/非法格式/非 http(s) 校验。
+
+### 待验证
+
+- 本机没有 Go，`go build`、`go vet` 和上面这个新测试都没跑过，需要在有 Go 环境的机器上补跑。
