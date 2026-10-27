@@ -6,11 +6,38 @@ import { Main } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 
 import { getTransferRecords } from './api'
 import { getDefaultTransferRecordDateRange } from './lib/date-range'
 
 const PAGE_SIZE = 20
+
+function ModeBadge(props: { mode: string }) {
+  const { t } = useTranslation()
+  let label = '—'
+  let cls = 'bg-muted text-muted-foreground'
+  if (props.mode === 'add') {
+    label = t('Add')
+    cls = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+  } else if (props.mode === 'subtract') {
+    label = t('Subtract')
+    cls = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+  } else if (props.mode === 'override') {
+    label = t('Override')
+    cls = 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+  }
+  return (
+    <span
+      className={cn(
+        'inline-block rounded px-1.5 py-0.5 text-xs font-medium',
+        cls
+      )}
+    >
+      {label}
+    </span>
+  )
+}
 
 export function TransferRecords() {
   const { t } = useTranslation()
@@ -114,6 +141,7 @@ export function TransferRecords() {
               <tr className='border-b text-left'>
                 <th className='px-4 py-3'>{t('Time')}</th>
                 <th className='px-4 py-3'>{t('Username')}</th>
+                <th className='px-4 py-3'>{t('Mode')}</th>
                 <th className='px-4 py-3 text-right'>{t('Quota')}</th>
               </tr>
             </thead>
@@ -124,6 +152,9 @@ export function TransferRecords() {
                     {new Date(record.created_at * 1000).toLocaleString()}
                   </td>
                   <td className='px-4 py-3'>{record.username}</td>
+                  <td className='px-4 py-3'>
+                    <ModeBadge mode={record.mode} />
+                  </td>
                   <td className='px-4 py-3 text-right font-mono'>
                     {record.amount}
                   </td>
@@ -132,7 +163,7 @@ export function TransferRecords() {
               {!query.isLoading && !query.data?.items.length && (
                 <tr>
                   <td
-                    colSpan={3}
+                    colSpan={4}
                     className='text-muted-foreground px-4 py-10 text-center'
                   >
                     {t('No transfer records')}

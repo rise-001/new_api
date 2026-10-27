@@ -207,6 +207,7 @@ type QuotaAdditionLog struct {
 	Username  string `json:"username"`
 	CreatedAt int64  `json:"created_at"`
 	Amount    string `json:"amount"`
+	Mode      string `json:"mode"` // "add", "subtract", "override"
 }
 
 type quotaAdditionLogOther struct {
@@ -214,6 +215,8 @@ type quotaAdditionLogOther struct {
 		Action string `json:"action"`
 		Params struct {
 			Quota        string `json:"quota"`
+			From         string `json:"from"`
+			To           string `json:"to"`
 			TargetUserId int    `json:"target_user_id"`
 		} `json:"params"`
 	} `json:"op"`
@@ -222,14 +225,18 @@ type quotaAdditionLogOther struct {
 const (
 	quotaAdditionContentPrefix       = "Increased user quota by "
 	legacyQuotaAdditionContentPrefix = "管理员增加用户额度 "
+	quotaSubtractContentPrefix       = "Decreased user quota by "
+	quotaOverrideContentPrefix       = "Overrode user quota from "
 )
 
 func GetQuotaAdditionLogs(startTimestamp int64, endTimestamp int64, username string, startIdx int, num int) (records []*QuotaAdditionLog, total int64, err error) {
 	tx := LOG_DB.Where(
-		"logs.type = ? AND (logs.content LIKE ? OR logs.content LIKE ?)",
+		"logs.type = ? AND (logs.content LIKE ? OR logs.content LIKE ? OR logs.content LIKE ? OR logs.content LIKE ?)",
 		LogTypeManage,
 		quotaAdditionContentPrefix+"%",
 		legacyQuotaAdditionContentPrefix+"%",
+		quotaSubtractContentPrefix+"%",
+		quotaOverrideContentPrefix+"%",
 	)
 	if username != "" {
 		var targetUserId int
@@ -285,8 +292,18 @@ func GetQuotaAdditionLogs(startTimestamp int64, endTimestamp int64, username str
 			CreatedAt: log.CreatedAt,
 		}
 		var details quotaAdditionLogOther
-		if common.UnmarshalJsonStr(log.Other, &details) == nil && details.Op.Action == "user.quota_add" {
-			record.Amount = details.Op.Params.Quota
+		if common.UnmarshalJsonStr(log.Other, &details) == nil {
+			switch details.Op.Action {
+			case "user.quota_add":
+				record.Mode = "add"
+				record.Amount = details.Op.Params.Quota
+			case "user.quota_subtract":
+				record.Mode = "subtract"
+				record.Amount = details.Op.Params.Quota
+			case "user.quota_override":
+				record.Mode = "override"
+				record.Amount = details.Op.Params.To
+			}
 			if details.Op.Params.TargetUserId > 0 {
 				record.UserId = details.Op.Params.TargetUserId
 				record.Username = ""
@@ -294,8 +311,21 @@ func GetQuotaAdditionLogs(startTimestamp int64, endTimestamp int64, username str
 			}
 		}
 		if record.Amount == "" {
-			record.Amount = strings.TrimPrefix(log.Content, quotaAdditionContentPrefix)
-			record.Amount = strings.TrimPrefix(record.Amount, legacyQuotaAdditionContentPrefix)
+			// legacy records without structured op
+			switch {
+			case strings.HasPrefix(log.Content, quotaAdditionContentPrefix):
+				record.Mode = "add"
+				record.Amount = strings.TrimPrefix(log.Content, quotaAdditionContentPrefix)
+			case strings.HasPrefix(log.Content, legacyQuotaAdditionContentPrefix):
+				record.Mode = "add"
+				record.Amount = strings.TrimPrefix(log.Content, legacyQuotaAdditionContentPrefix)
+			case strings.HasPrefix(log.Content, quotaSubtractContentPrefix):
+				record.Mode = "subtract"
+				record.Amount = strings.TrimPrefix(log.Content, quotaSubtractContentPrefix)
+			case strings.HasPrefix(log.Content, quotaOverrideContentPrefix):
+				record.Mode = "override"
+				record.Amount = strings.TrimPrefix(log.Content, quotaOverrideContentPrefix)
+			}
 		}
 		records = append(records, record)
 	}

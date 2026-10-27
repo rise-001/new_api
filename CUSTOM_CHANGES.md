@@ -10,6 +10,31 @@
 - `custom`：保存和部署二开功能
 - 同步上游时，先快进 `main`，再将 `main` 合并到 `custom`
 
+## 2026-10-27：转账记录展示扣减和覆盖额度操作
+
+### 功能说明
+
+- 转账记录从仅显示管理员增加额度，扩展为显示增加、扣减、覆盖三种额度操作。
+- 表格新增“模式”列，分别以绿色、红色、蓝色标签区分三种操作，兼容深色模式；未知模式显示 `—`。
+- 增加和扣减记录显示本次操作金额；有结构化审计数据的覆盖记录显示设置后的目标额度，而非变动差额。
+- 兼容原有中文增加额度日志及缺少结构化数据的英文日志；旧覆盖日志保留原文本中的起止额度信息。
+
+### 实现与同步注意
+
+- `model/log.go`：扩展 `GetQuotaAdditionLogs` 查询的日志类型，响应新增 `mode` 字段，从审计操作 `user.quota_add`、`user.quota_subtract`、`user.quota_override` 解析操作类型和金额，并保留旧日志文本回退。
+- `web/src/features/transfer-records/api.ts`：补充操作模式类型。
+- `web/src/features/transfer-records/index.tsx`：新增模式标签和表头，空状态调整为跨四列；复用现有多语言键。
+- 本次调整日志查询和展示，不新增数据库列，不改变实际额度操作或计费计算；部署需同时更新后端与前端。
+- 合并上游时需核对审计操作名、英文日志前缀与响应字段，避免记录被漏查。
+- 当前按用户名筛选仍沿用原有仅匹配增加额度的条件，扣减和覆盖记录需在不指定用户名时查看；后续需补齐筛选兼容。
+- 同次提交保留文末“新注册用户 ID 从 10000 起”的既有运维记录；其中数据库操作不会随代码推送自动执行。
+
+### 测试与验证
+
+- 转账记录默认日期范围的现有测试通过（1 项），涉及前端文件的 lint、格式检查及 `git diff --check` 通过；提交前将嵌套三元表达式改为直接条件分支以通过 lint。
+- 全量前端类型检查仍被原有 `web/src/features/profile/components/profile-security-card.tsx:101` 的 TS2367 错误阻断，该文件不在本次变更范围内。
+- 本机未找到 Go，后端测试未执行；本次未新增三种操作展示的专门回归测试，需在部署环境验证实际审计日志。
+
 ## 2026-10-27：用户统计“1天”从当天凌晨开始
 
 ### 功能说明
@@ -780,3 +805,73 @@ go test ./relay/channel/gemini
 ### 待验证
 
 - 本机没有 Go，`go build`、`go vet` 和上面这个新测试都没跑过，需要在有 Go 环境的机器上补跑。
+
+## 2026-09-24：新注册用户 ID 从 10000 起（运维操作，无代码改动）
+
+### 变更说明
+
+- 需求：让后续注册的用户 ID 从 10000 开始，已有用户 ID 不变。
+- 本次**没有改任何代码**，只在生产库上做了一次性数据操作。记录在此是因为这个状态不在代码里，换机器、重建数据库或迁移数据库类型时需要重新处理。
+- 生产环境是 SQLite（未设置 `SQL_DSN`），库文件在宿主机 `/opt/new-api/data/one-api.db`（容器内 `/data/one-api.db`，`Dockerfile` 的 `WORKDIR /data` + 默认 `common.SQLitePath`）。
+
+### 为什么用占位行而不是改序列
+
+- GORM 建出来的表是 `CREATE TABLE "users" ("id" integer, ..., PRIMARY KEY ("id"))`，**没有 `AUTOINCREMENT`**。
+- 这种 `INTEGER PRIMARY KEY` 是 rowid 别名，SQLite 分配新 ID 的规则是 `max(rowid) + 1`，不走 `sqlite_sequence`，所以没有"序列"可以直接 `setval`。
+- 唯一能抬高起点的办法是把表里的 `max(id)` 抬上去，即插入一行 ID 为 9999 的占位记录。
+- 如果哪天迁到 MySQL / PostgreSQL，做法完全不同，直接改自增起点即可：
+  - MySQL：`ALTER TABLE users AUTO_INCREMENT = 10000;`
+  - PostgreSQL：`SELECT setval(pg_get_serial_sequence('users','id'), 9999, true);`
+
+### 已执行的操作
+
+镜像里和宿主机都没有 `sqlite3` 命令，用系统自带的 `python3`（标准库含 `sqlite3`）操作。
+
+```bash
+DB=/opt/new-api/data/one-api.db
+docker stop new-api
+
+python3 - "$DB" <<'EOF'
+import sqlite3, sys, time
+con = sqlite3.connect(sys.argv[1])
+con.execute(
+    "INSERT INTO users (id, username, password, display_name, status, created_at)"
+    " VALUES (9999, '__id_seed__', '', 'id 占位', 2, ?)", (int(time.time()),))
+con.commit()
+print("max(id) =", con.execute("SELECT max(id) FROM users").fetchone()[0])
+EOF
+
+docker start new-api
+```
+
+- 执行前 `max(id) = 243`，执行后 `max(id) = 9999`。
+- 只需要显式给 `password`（`text NOT NULL` 且无默认值）；`auth_version` 有 `NOT NULL DEFAULT 1`，其余列都有默认值或可为 NULL。
+- `username` 是 UNIQUE；`access_token`、`aff_code` 上有唯一索引，留 NULL 即可（SQLite 中 NULL 互不冲突）。
+- 占位行 `status = 2`（禁用）且密码为空，无法登录。
+
+### 待办：删除占位行
+
+**必须等第一个真实用户注册拿到 ID 10000 之后再删**。提前删会让 `max(id)` 退回 243，起点失效。
+
+```bash
+python3 - "$DB" <<'EOF'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1], timeout=30)
+mx = con.execute("SELECT max(id) FROM users").fetchone()[0]
+if mx < 10000:
+    sys.exit(f"中止：max(id)={mx}，真实用户还没拿到 10000")
+con.execute("DELETE FROM users WHERE id = 9999")
+con.commit()
+print("max(id) =", con.execute("SELECT max(id) FROM users").fetchone()[0])
+EOF
+```
+
+- 不用停服，`timeout=30` 用于避开应用的 SQLite 写锁（应用侧 `busy_timeout` 是 30 秒）。
+- 不删也没有副作用，代价只是用户列表里长期多一行 `__id_seed__`。
+
+### 注意事项
+
+- 表间没有外键约束，`tokens` / `logs` 等表的 `user_id` 只是普通整数列，占位行不会产生级联影响；9999 从未登录，也不会有关联数据。
+- 管理员用户列表走 `DB.Unscoped()`（`model/user.go` 的 `GetAllUsers` / `SearchUsers`），软删除的行也会显示，所以占位行不能靠 `deleted_at` 藏起来。
+- `model.GetMaxUserId()` 被 `controller/oauth.go`、`controller/wechat.go` 用来生成 OAuth / 微信注册的默认用户名（`前缀 + (maxId+1)`），占位行在与不在都能取到与实际分配一致的 ID，不受影响。
+- 全新部署（新建空库）不会继承这个起点，需要在首次启动后重做一遍上面的插入。

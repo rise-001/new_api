@@ -6,6 +6,7 @@ export interface TransferRecord {
   username: string
   created_at: number
   amount: string
+  mode: 'add' | 'subtract' | 'override' | ''
 }
 
 interface TransferResponse {
