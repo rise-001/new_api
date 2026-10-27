@@ -32,6 +32,7 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 		ActualQuotaBeforeGroup: quotaBeforeGroup,
 		ActualQuotaAfterGroup:  afterGroup,
 		MatchedTier:            trace.MatchedTier,
+		MatchedMultipliers:     trace.MatchedMultipliers,
 		CrossedTier:            crossed,
 		Clamp:                  clamp,
 	}, nil

@@ -28,12 +28,13 @@ type TokenParams struct {
 	AO   float64 // audio output tokens
 }
 
-// TraceResult holds side-channel info captured by the tier() function
+// TraceResult holds side-channel info captured by tier() and multiplier conditions
 // during Expr execution. This replaces the old Breakdown mechanism —
 // the Expr itself is the single source of truth for billing logic.
 type TraceResult struct {
-	MatchedTier string  `json:"matched_tier"`
-	Cost        float64 `json:"cost"`
+	MatchedTier        string  `json:"matched_tier"`
+	Cost               float64 `json:"cost"`
+	MatchedMultipliers []int   `json:"matched_multipliers"`
 }
 
 // BillingSnapshot captures the billing rule state frozen at pre-consume time.
@@ -59,6 +60,7 @@ type TieredResult struct {
 	ActualQuotaAfterGroup  int     `json:"actual_quota_after_group"`
 	MatchedTier            string  `json:"matched_tier"`
 	CrossedTier            bool    `json:"crossed_tier"`
+	MatchedMultipliers     []int   `json:"matched_multipliers"`
 	// Clamp records an int32 saturation event during quota conversion so the
 	// caller can surface it on the consume log for admin auditing. Nil when no
 	// clamping occurred. Not serialized: the marker is attached separately via

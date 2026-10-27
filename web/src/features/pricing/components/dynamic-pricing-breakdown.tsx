@@ -52,6 +52,8 @@ type DynamicPricingBreakdownProps = {
    * the usage-log details dialog to show which tier the engine selected.
    */
   matchedTierLabel?: string | null
+  /** Zero-based rule indices captured by the actual billing evaluation. */
+  matchedMultiplierIndices?: number[] | null
   /**
    * Hide cache-pricing columns regardless of the per-tier values. The log
    * details dialog passes this when the actual request did not consume any
@@ -153,9 +155,13 @@ function describeGroup(
     .join(' && ')
 }
 
+// Rows are immutable expression positions. Multiplier positions are also the
+// rule identifiers persisted by settlement, so positional keys are intentional.
+/* oxlint-disable react/no-array-index-key */
 export function DynamicPricingBreakdown({
   billingExpr,
   matchedTierLabel,
+  matchedMultiplierIndices,
   hideCacheColumns = false,
   compact = false,
 }: DynamicPricingBreakdownProps) {
@@ -425,27 +431,45 @@ export function DynamicPricingBreakdown({
             {t('Conditional multipliers')}
           </div>
           <ul className='space-y-1.5'>
-            {ruleGroups.map((group, gi) => (
-              <li
-                key={`group-${gi}`}
-                className='bg-muted/50 flex items-center justify-between gap-3 rounded-md px-3 py-2'
-              >
-                <span
+            {ruleGroups.map((group, gi) => {
+              const matched = matchedMultiplierIndices?.includes(gi) === true
+              return (
+                <li
+                  key={`group-${gi}`}
                   className={cn(
-                    'text-foreground break-all',
-                    compact ? 'text-xs' : 'text-sm'
+                    'flex flex-wrap items-center justify-between gap-3 rounded-md px-3 py-2',
+                    matched
+                      ? 'bg-emerald-50/70 dark:bg-emerald-500/10'
+                      : 'bg-muted/50'
                   )}
                 >
-                  {describeGroup(group, t)}
-                </span>
-                <Badge
-                  variant='secondary'
-                  className='shrink-0 bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300'
-                >
-                  {group.multiplier}x
-                </Badge>
-              </li>
-            ))}
+                  <span
+                    className={cn(
+                      'text-foreground break-all',
+                      compact ? 'text-xs' : 'text-sm'
+                    )}
+                  >
+                    {describeGroup(group, t)}
+                  </span>
+                  <div className='flex shrink-0 flex-wrap items-center gap-2'>
+                    {matched && (
+                      <Badge
+                        variant='secondary'
+                        className='bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
+                      >
+                        {t('Matched')}
+                      </Badge>
+                    )}
+                    <Badge
+                      variant='secondary'
+                      className='shrink-0 bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300'
+                    >
+                      {group.multiplier}x
+                    </Badge>
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         </div>
       )}

@@ -182,7 +182,7 @@ After the upstream response returns with actual token usage:
 
 **Files**: `service/log_info_generate.go`, `web/src/helpers/render.jsx`
 
-Backend: `InjectTieredBillingInfo()` adds `billing_mode`, `expr_b64` (base64 expression), and `matched_tier` to the log's `other` JSON.
+Backend: `InjectTieredBillingInfo()` adds `billing_mode`, `expr_b64` (base64 expression), `matched_tier`, and `matched_multipliers` to the log's `other` JSON. `matched_multipliers` contains zero-based visual multiplier rule indices captured during the actual settlement evaluation; an empty array means none matched. Missing metadata (older logs or failed settlement) is unknown and must not be inferred from the current time.
 
 Frontend: Detects `billing_mode === "tiered_expr"`, decodes `expr_b64`, parses tiers via shared `parseTiersFromExpr()`, and renders pricing breakdown.
 
