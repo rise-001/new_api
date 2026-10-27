@@ -36,11 +36,12 @@ import {
   saveGranularity,
   processUserChartData,
 } from '@/features/dashboard/lib'
+import { getUserChartsTimeRange } from '@/features/dashboard/lib/user-charts-time-range'
 import type {
   ProcessedUserChartData,
   UserChartsFilters,
 } from '@/features/dashboard/types'
-import { getRollingDateRange, type TimeGranularity } from '@/lib/time'
+import type { TimeGranularity } from '@/lib/time'
 import { VCHART_OPTION } from '@/lib/vchart'
 
 let themeManagerPromise: Promise<
@@ -80,19 +81,16 @@ export function UserCharts(props: UserChartsProps) {
   >(null)
 
   // The selection is owned by the dashboard parent so it persists across
-  // sub-section switches; the rolling window is derived from the chosen range.
+  // sub-section switches; 1 day starts at local midnight, longer ranges roll.
   const timeGranularity = props.filters.timeGranularity
   const selectedRange = props.filters.selectedRange
   const topUserLimit = props.filters.topUserLimit
   const onFiltersChange = props.onFiltersChange
 
-  const timeRange = useMemo(() => {
-    const { start, end } = getRollingDateRange(selectedRange)
-    return {
-      start_timestamp: Math.floor(start.getTime() / 1000),
-      end_timestamp: Math.floor(end.getTime() / 1000),
-    }
-  }, [selectedRange])
+  const timeRange = useMemo(
+    () => getUserChartsTimeRange(selectedRange),
+    [selectedRange]
+  )
 
   const handleRangeChange = useCallback(
     (days: number) => {

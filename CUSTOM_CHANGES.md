@@ -10,6 +10,28 @@
 - `custom`：保存和部署二开功能
 - 同步上游时，先快进 `main`，再将 `main` 合并到 `custom`
 
+## 2026-10-27：用户统计“1天”从当天凌晨开始
+
+### 功能说明
+
+- “用户统计”的“1天”范围由最近 24 小时改为当天 `00:00:00` 至当前时间，按浏览器本地时区计算。
+- `7天`、`14天`、`29天` 保持原有滚动时间范围；“小时/天/周”仍仅控制图表汇总粒度。
+- 本次仅调整用户统计，不改变模型调用分析、分流页面的时间范围，也不改后端接口、数据库或计费逻辑。
+
+### 实现与同步注意
+
+- `web/src/features/dashboard/lib/user-charts-time-range.ts`：集中计算用户统计查询的起止时间戳，单日范围复用 `getStartOfDay`，其他范围继续使用 `getRollingDateRange`。
+- `web/src/features/dashboard/components/users/user-charts.tsx`：使用上述时间范围构建 `/api/data/users` 查询参数，保留原有筛选状态和查询缓存行为。
+- 时间范围在进入页面或切换范围时计算，未新增页面停留期间的自动跨日刷新。
+- 合并上游时保留此处用户统计专用的单日规则，避免直接改动公共 `getRollingDateRange` 而影响其他页面。
+- 部署需重新构建前端；Docker 部署需使用包含本次提交的新镜像并重建容器。
+
+### 测试与验证
+
+- `web/src/features/dashboard/lib/__tests__/user-charts-time-range.test.ts`：3 项回归测试通过，覆盖当天零点至当前时间、跨年当天零点边界及其他预设范围保持不变。
+- 涉及前端文件的 lint、格式检查及 `git diff --check` 通过。
+- 全量前端类型检查仍被原有 `web/src/features/profile/components/profile-security-card.tsx:101` 的 TS2367 错误阻断，该文件未在本次修改。
+
 ## 2026-10-27：用量日志显示条件乘数命中状态
 
 ### 功能说明
