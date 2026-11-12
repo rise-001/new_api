@@ -11,6 +11,13 @@ import (
 )
 
 func GetQuotaAdditionLogs(c *gin.Context) {
+	mode := c.Query("mode")
+	switch mode {
+	case "", "topup", "add", "subtract", "override", "redemption":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid transfer record type"})
+		return
+	}
 	pageInfo := common.GetPageQuery(c)
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
@@ -20,6 +27,7 @@ func GetQuotaAdditionLogs(c *gin.Context) {
 		c.Query("username"),
 		pageInfo.GetStartIdx(),
 		pageInfo.GetPageSize(),
+		mode,
 	)
 	if err != nil {
 		common.ApiError(c, err)

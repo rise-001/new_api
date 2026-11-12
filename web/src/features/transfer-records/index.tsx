@@ -3,46 +3,45 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Main } from '@/components/layout'
+import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 
-import { getTransferRecords } from './api'
+import { getTransferRecords, type TransferRecordMode } from './api'
+import { TransferUserFilter } from './components/user-filter'
 import { getDefaultTransferRecordDateRange } from './lib/date-range'
-
-const PAGE_SIZE = 20
 
 function ModeBadge(props: { mode: string }) {
   const { t } = useTranslation()
   let label = '—'
-  let cls = 'bg-muted text-muted-foreground'
+  let variant: StatusVariant = 'neutral'
   if (props.mode === 'add') {
     label = t('Add')
-    cls = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+    variant = 'success'
   } else if (props.mode === 'subtract') {
     label = t('Subtract')
-    cls = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+    variant = 'danger'
   } else if (props.mode === 'override') {
     label = t('Override')
-    cls = 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+    variant = 'info'
+  } else if (props.mode === 'topup') {
+    label = t('Recharge')
+    variant = 'success'
+  } else if (props.mode === 'redemption') {
+    label = t('Redemption Code Redemption')
+    variant = 'purple'
   }
-  return (
-    <span
-      className={cn(
-        'inline-block rounded px-1.5 py-0.5 text-xs font-medium',
-        cls
-      )}
-    >
-      {label}
-    </span>
-  )
+  return <StatusBadge label={label} variant={variant} copyable={false} />
 }
 
 export function TransferRecords() {
   const { t } = useTranslation()
   const [draftFilters, setDraftFilters] = useState(() => ({
     username: '',
+    mode: '' as TransferRecordMode | '',
+    pageSize: 20,
     ...getDefaultTransferRecordDateRange(),
   }))
   const [filters, setFilters] = useState(draftFilters)
@@ -52,7 +51,8 @@ export function TransferRecords() {
     queryFn: () =>
       getTransferRecords({
         page,
-        pageSize: PAGE_SIZE,
+        pageSize: filters.pageSize,
+        mode: filters.mode,
         username: filters.username || undefined,
         startTimestamp: filters.start
           ? Math.floor(new Date(filters.start).getTime() / 1000)
@@ -64,7 +64,7 @@ export function TransferRecords() {
   })
   const totalPages = Math.max(
     1,
-    Math.ceil((query.data?.total || 0) / PAGE_SIZE)
+    Math.ceil((query.data?.total || 0) / filters.pageSize)
   )
 
   const applyFilters = () => {
@@ -78,70 +78,133 @@ export function TransferRecords() {
         <div>
           <h1 className='text-xl font-semibold'>{t('Transfer Records')}</h1>
           <p className='text-muted-foreground text-sm'>
-            {t('Manual quota addition history')}
+            {t('Recharge, quota adjustment and redemption history')}
           </p>
         </div>
-        <FieldGroup className='flex-row flex-wrap items-end gap-2'>
-          <Field className='w-auto gap-1'>
-            <FieldLabel htmlFor='transfer-record-username'>
-              {t('Username')}
-            </FieldLabel>
-            <Input
-              id='transfer-record-username'
-              className='w-44'
-              value={draftFilters.username}
-              onChange={(e) =>
-                setDraftFilters((current) => ({
-                  ...current,
-                  username: e.target.value,
-                }))
-              }
-              placeholder={t('Search username')}
-            />
-          </Field>
-          <Field className='w-auto gap-1'>
-            <FieldLabel htmlFor='transfer-record-start-time'>
-              {t('Start time')}
-            </FieldLabel>
-            <Input
-              id='transfer-record-start-time'
-              className='w-48'
-              type='datetime-local'
-              value={draftFilters.start}
-              onChange={(e) =>
-                setDraftFilters((current) => ({
-                  ...current,
-                  start: e.target.value,
-                }))
-              }
-            />
-          </Field>
-          <Field className='w-auto gap-1'>
-            <FieldLabel htmlFor='transfer-record-end-time'>
-              {t('End time')}
-            </FieldLabel>
-            <Input
-              id='transfer-record-end-time'
-              className='w-48'
-              type='datetime-local'
-              value={draftFilters.end}
-              onChange={(e) =>
-                setDraftFilters((current) => ({
-                  ...current,
-                  end: e.target.value,
-                }))
-              }
-            />
-          </Field>
-          <Button onClick={applyFilters}>{t('Search')}</Button>
-        </FieldGroup>
-        <div className='overflow-hidden rounded-lg border'>
-          <table className='w-full text-sm'>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            applyFilters()
+          }}
+        >
+          <FieldGroup className='flex-row flex-wrap items-end gap-2'>
+            <Field className='w-auto gap-1'>
+              <FieldLabel htmlFor='transfer-record-username'>
+                {t('Username')}
+              </FieldLabel>
+              <TransferUserFilter
+                value={draftFilters.username}
+                onValueChange={(username) =>
+                  setDraftFilters((current) => ({
+                    ...current,
+                    username,
+                  }))
+                }
+              />
+            </Field>
+            <Field className='w-auto gap-1'>
+              <FieldLabel htmlFor='transfer-record-mode'>
+                {t('Type')}
+              </FieldLabel>
+              <NativeSelect
+                id='transfer-record-mode'
+                className='w-44'
+                value={draftFilters.mode}
+                onChange={(event) =>
+                  setDraftFilters((current) => ({
+                    ...current,
+                    mode: event.target.value as TransferRecordMode | '',
+                  }))
+                }
+              >
+                <NativeSelectOption value=''>
+                  {t('All Types')}
+                </NativeSelectOption>
+                <NativeSelectOption value='topup'>
+                  {t('Recharge')}
+                </NativeSelectOption>
+                <NativeSelectOption value='add'>{t('Add')}</NativeSelectOption>
+                <NativeSelectOption value='subtract'>
+                  {t('Subtract')}
+                </NativeSelectOption>
+                <NativeSelectOption value='override'>
+                  {t('Override')}
+                </NativeSelectOption>
+                <NativeSelectOption value='redemption'>
+                  {t('Redemption Code Redemption')}
+                </NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field className='w-auto gap-1'>
+              <FieldLabel htmlFor='transfer-record-page-size'>
+                {t('Rows per page')}
+              </FieldLabel>
+              <NativeSelect
+                id='transfer-record-page-size'
+                className='w-24'
+                value={draftFilters.pageSize}
+                onChange={(event) =>
+                  setDraftFilters((current) => ({
+                    ...current,
+                    pageSize: Number(event.target.value),
+                  }))
+                }
+              >
+                {[20, 50, 100].map((size) => (
+                  <NativeSelectOption key={size} value={size}>
+                    {size}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field className='w-auto gap-1'>
+              <FieldLabel htmlFor='transfer-record-start-time'>
+                {t('Start Time')}
+              </FieldLabel>
+              <Input
+                id='transfer-record-start-time'
+                className='w-48'
+                type='datetime-local'
+                max={draftFilters.end || undefined}
+                value={draftFilters.start}
+                onChange={(e) =>
+                  setDraftFilters((current) => ({
+                    ...current,
+                    start: e.target.value,
+                  }))
+                }
+              />
+            </Field>
+            <Field className='w-auto gap-1'>
+              <FieldLabel htmlFor='transfer-record-end-time'>
+                {t('End Time')}
+              </FieldLabel>
+              <Input
+                id='transfer-record-end-time'
+                className='w-48'
+                type='datetime-local'
+                min={draftFilters.start || undefined}
+                value={draftFilters.end}
+                onChange={(e) =>
+                  setDraftFilters((current) => ({
+                    ...current,
+                    end: e.target.value,
+                  }))
+                }
+              />
+            </Field>
+            <Button type='submit' disabled={query.isFetching}>
+              {t('Search')}
+            </Button>
+          </FieldGroup>
+        </form>
+        <div className='overflow-x-auto rounded-lg border'>
+          <table className='w-full text-sm' aria-busy={query.isFetching}>
             <thead className='bg-muted/50'>
               <tr className='border-b text-left'>
                 <th className='px-4 py-3'>{t('Time')}</th>
                 <th className='px-4 py-3'>{t('Username')}</th>
-                <th className='px-4 py-3'>{t('Mode')}</th>
+                <th className='px-4 py-3'>{t('Type')}</th>
                 <th className='px-4 py-3 text-right'>{t('Quota')}</th>
               </tr>
             </thead>
@@ -151,7 +214,9 @@ export function TransferRecords() {
                   <td className='px-4 py-3'>
                     {new Date(record.created_at * 1000).toLocaleString()}
                   </td>
-                  <td className='px-4 py-3'>{record.username}</td>
+                  <td className='px-4 py-3'>
+                    {record.username || `#${record.user_id}`}
+                  </td>
                   <td className='px-4 py-3'>
                     <ModeBadge mode={record.mode} />
                   </td>
@@ -160,16 +225,39 @@ export function TransferRecords() {
                   </td>
                 </tr>
               ))}
-              {!query.isLoading && !query.data?.items.length && (
+              {query.isLoading && (
                 <tr>
                   <td
                     colSpan={4}
                     className='text-muted-foreground px-4 py-10 text-center'
                   >
-                    {t('No transfer records')}
+                    {t('Loading...')}
                   </td>
                 </tr>
               )}
+              {query.isError && (
+                <tr>
+                  <td
+                    colSpan={4}
+                    className='text-destructive px-4 py-10 text-center'
+                    role='alert'
+                  >
+                    {t('Failed to load transfer records')}
+                  </td>
+                </tr>
+              )}
+              {!query.isLoading &&
+                !query.isError &&
+                !query.data?.items.length && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className='text-muted-foreground px-4 py-10 text-center'
+                    >
+                      {t('No transfer records')}
+                    </td>
+                  </tr>
+                )}
             </tbody>
           </table>
         </div>
@@ -177,7 +265,7 @@ export function TransferRecords() {
           <Button
             variant='outline'
             size='sm'
-            disabled={page <= 1}
+            disabled={query.isFetching || page <= 1}
             onClick={() => setPage((p) => p - 1)}
           >
             {t('Previous')}
@@ -188,7 +276,7 @@ export function TransferRecords() {
           <Button
             variant='outline'
             size='sm'
-            disabled={page >= totalPages}
+            disabled={query.isFetching || page >= totalPages}
             onClick={() => setPage((p) => p + 1)}
           >
             {t('Next')}

@@ -1,12 +1,19 @@
 import { api } from '@/lib/api'
 
+export type TransferRecordMode =
+  | 'topup'
+  | 'add'
+  | 'subtract'
+  | 'override'
+  | 'redemption'
+
 export interface TransferRecord {
   id: number
   user_id: number
   username: string
   created_at: number
   amount: string
-  mode: 'add' | 'subtract' | 'override' | ''
+  mode: TransferRecordMode | ''
 }
 
 interface TransferResponse {
@@ -21,6 +28,7 @@ export async function getTransferRecords(params: {
   startTimestamp?: number
   endTimestamp?: number
   username?: string
+  mode?: TransferRecordMode | ''
 }): Promise<{ items: TransferRecord[]; total: number }> {
   const query = new URLSearchParams({
     p: String(params.page),
@@ -33,6 +41,7 @@ export async function getTransferRecords(params: {
     query.set('end_timestamp', String(params.endTimestamp))
   }
   if (params.username) query.set('username', params.username)
+  if (params.mode) query.set('mode', params.mode)
   const res = await api.get<TransferResponse>(`/api/user/transfer?${query}`)
   if (!res.data.success) {
     throw new Error(res.data.message || 'Failed to load transfer records')
