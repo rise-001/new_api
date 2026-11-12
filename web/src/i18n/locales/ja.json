@@ -3749,6 +3749,7 @@
     "Registered a passkey": "パスキーを登録しました",
     "Registration Enabled": "登録が有効",
     "Registration flow expired. Please try again.": "登録手続きの有効期限が切れました。もう一度お試しください。",
+    "Registration IP": "登録時のIPアドレス",
     "Registry (optional)": "レジストリ (オプション)",
     "Registry secret": "レジストリ シークレット",
     "Registry username": "レジストリ ユーザー名",

@@ -3749,6 +3749,7 @@
     "Registered a passkey": "注册了一个 Passkey",
     "Registration Enabled": "注册已启用",
     "Registration flow expired. Please try again.": "注册流程已过期，请重试。",
+    "Registration IP": "注册 IP",
     "Registry (optional)": "注册表 (可选)",
     "Registry secret": "注册表密钥",
     "Registry username": "注册表用户名",

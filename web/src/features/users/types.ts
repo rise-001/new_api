@@ -55,6 +55,7 @@ export const userSchema = z.object({
   status: userStatusSchema,
   role: userRoleSchema,
   created_at: z.number().optional(),
+  register_ip: z.string().optional(),
   updated_at: z.number().optional(),
   last_login_at: z.number().optional(),
   DeletedAt: z.any().nullable().optional(),

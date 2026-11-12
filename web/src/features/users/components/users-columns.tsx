@@ -293,6 +293,18 @@ export function useUsersColumns(): ColumnDef<User>[] {
       meta: { mobileHidden: true },
     },
     {
+      accessorKey: 'register_ip',
+      header: t('Registration IP'),
+      cell: ({ row }) => (
+        <LongText className='max-w-[240px] font-mono text-sm'>
+          {row.original.register_ip || '—'}
+        </LongText>
+      ),
+      enableSorting: false,
+      size: 200,
+      meta: { mobileOrder: 50 },
+    },
+    {
       accessorKey: 'created_at',
       header: t('Created At'),
       cell: ({ row }) => {

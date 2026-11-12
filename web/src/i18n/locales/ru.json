@@ -3749,6 +3749,7 @@
     "Registered a passkey": "Ключ доступа зарегистрирован",
     "Registration Enabled": "Регистрация включена",
     "Registration flow expired. Please try again.": "Процесс регистрации истёк. Повторите попытку.",
+    "Registration IP": "IP при регистрации",
     "Registry (optional)": "Реестр (необязательно)",
     "Registry secret": "Секрет реестра",
     "Registry username": "Имя пользователя реестра",

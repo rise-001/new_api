@@ -71,14 +71,12 @@ export function ProfileSecurityCard({
       title: t('Change Password'),
       description: t('Update your password to keep your account secure'),
       action: () => dialogs.open('password'),
-      variant: 'default' as const,
     },
     {
       icon: Key,
       title: t('Access Token'),
       description: t('Generate and manage your API access token'),
       action: () => dialogs.open('token'),
-      variant: 'default' as const,
     },
   ]
 
@@ -97,9 +95,7 @@ export function ProfileSecurityCard({
               key={item.title}
               type='button'
               onClick={item.action}
-              className={`flex items-center gap-3 rounded-lg border p-3 text-left md:flex-col md:gap-2 md:p-4 md:text-center ${
-                item.variant === 'destructive' ? 'border-destructive/30' : ''
-              }`}
+              className='flex items-center gap-3 rounded-lg border p-3 text-left md:flex-col md:gap-2 md:p-4 md:text-center'
             >
               <IconBadge tone='neutral' size='sm'>
                 <item.icon />
