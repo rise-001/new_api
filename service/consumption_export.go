@@ -22,7 +22,7 @@ import (
 
 const (
 	consumptionExportBatchSize       = 1000
-	consumptionExportMaxRecords      = 300000
+	consumptionExportMaxRecords      = 500000
 	consumptionExportMaxTokenSheets  = 200
 	consumptionExportMaxRangeSeconds = int64(31 * 24 * time.Hour / time.Second)
 	consumptionExportCleanupInterval = time.Minute
