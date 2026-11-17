@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { PermissionCatalog } from '@/lib/admin-permissions'
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 
 import type {
   User,
@@ -122,9 +122,10 @@ export async function deleteUser(id: number): Promise<ApiResponse> {
  */
 export async function manageUser(
   id: number,
-  action: ManageUserAction
+  action: ManageUserAction,
+  config?: ApiRequestConfig
 ): Promise<ApiResponse<Partial<User>>> {
-  const res = await api.post('/api/user/manage', { id, action })
+  const res = await api.post('/api/user/manage', { id, action }, config)
   return res.data
 }
 
