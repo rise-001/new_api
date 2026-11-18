@@ -31,9 +31,12 @@ import { Button } from '@/components/ui/button'
 import { manageUser } from '../api'
 import { isUserDeleted, USER_ROLE, USER_STATUS } from '../constants'
 import type { User } from '../types'
+import type { useUsers } from './users-provider'
 
 interface DataTableBulkActionsProps {
   table: Table<User>
+  requestVerification: ReturnType<typeof useUsers>['requestVerification']
+  verificationActive?: boolean
 }
 
 export function DataTableBulkActions(props: DataTableBulkActionsProps) {
@@ -55,24 +58,31 @@ export function DataTableBulkActions(props: DataTableBulkActionsProps) {
       const succeededIds: number[] = []
       const failedIds: number[] = []
 
-      // Limit concurrent requests while preserving each user's permission checks.
-      for (let offset = 0; offset < users.length; offset += 5) {
-        const batch = users.slice(offset, offset + 5)
-        const results = await Promise.allSettled(
-          batch.map((user) =>
-            manageUser(user.id, 'disable', {
-              skipBusinessError: true,
-              skipErrorHandler: true,
-            })
-          )
-        )
-        results.forEach((result, index) => {
-          if (result.status === 'fulfilled' && result.value.success) {
-            succeededIds.push(batch[index].id)
-          } else {
-            failedIds.push(batch[index].id)
-          }
-        })
+      for (const user of users) {
+        let proof
+        try {
+          proof = await props.requestVerification({
+            scope: 'admin.user.manage',
+            context: { user_id: user.id, action: 'disable' },
+            title: t('Disable selected users'),
+            description: t(
+              'Confirm your identity before changing the account {{username}}.',
+              {
+                username: user.username,
+              }
+            ),
+          })
+        } catch {
+          break
+        }
+        if (!proof) break
+        try {
+          const result = await manageUser(user.id, 'disable', proof.proof_token)
+          if (result.success) succeededIds.push(user.id)
+          else failedIds.push(user.id)
+        } catch {
+          failedIds.push(user.id)
+        }
       }
 
       return { succeededIds, failedIds }
@@ -126,7 +136,7 @@ export function DataTableBulkActions(props: DataTableBulkActionsProps) {
       </BulkActionsToolbar>
 
       <ConfirmDialog
-        open={usersToDisable !== null}
+        open={usersToDisable !== null && !props.verificationActive}
         onOpenChange={(open) => {
           if (!open && !disableMutation.isPending) setUsersToDisable(null)
         }}

@@ -17,19 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { after, test } from 'node:test'
 
-import { Window } from 'happy-dom'
 import { createInstance } from 'i18next'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nextProvider } from 'react-i18next'
+import { test } from 'vitest'
 
 import zh from '@/i18n/locales/zh.json'
 
 import { DynamicPricingBreakdown } from '../dynamic-pricing-breakdown'
-
-const domWindow = new Window()
-after(() => domWindow.close())
 
 const i18n = createInstance()
 await i18n.init({ lng: 'zh', resources: { zh } })
@@ -42,7 +38,7 @@ function renderRules(options: {
   expr?: string
   compact?: boolean
 }) {
-  const container = domWindow.document.createElement('div')
+  const container = document.createElement('div')
   container.innerHTML = renderToStaticMarkup(
     <I18nextProvider i18n={i18n}>
       <DynamicPricingBreakdown

@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,8 +24,16 @@ type createConsumptionExportRequest struct {
 }
 
 func CreateConsumptionExport(c *gin.Context) {
+	if c.GetInt("role") < common.RoleAdminUser && !operation_setting.GetLogSetting().UserExportEnabled {
+		common.ApiErrorT(c, "Log export is disabled")
+		return
+	}
 	request := createConsumptionExportRequest{}
 	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if _, err := limitLogTimeRange(request.StartTimestamp, request.EndTimestamp); err != nil {
 		common.ApiError(c, err)
 		return
 	}

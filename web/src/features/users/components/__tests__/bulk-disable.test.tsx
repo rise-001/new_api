@@ -17,44 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { after, afterEach, beforeEach, describe, test } from 'node:test'
 
-import { Window } from 'happy-dom'
+import { afterAll, afterEach, beforeEach, describe, test } from 'vitest'
 
 import type { ApiResponse, User } from '../../types'
-
-const domWindow = new Window()
-const domGlobals = [
-  'window',
-  'document',
-  'navigator',
-  'HTMLElement',
-  'HTMLInputElement',
-  'HTMLButtonElement',
-  'SVGElement',
-  'Node',
-  'Element',
-  'Event',
-  'CustomEvent',
-  'MutationObserver',
-  'ResizeObserver',
-  'requestAnimationFrame',
-  'cancelAnimationFrame',
-  'getComputedStyle',
-  'matchMedia',
-] as const
-const originalGlobals = new Map(
-  domGlobals.map((key) => [
-    key,
-    Object.getOwnPropertyDescriptor(globalThis, key),
-  ])
-)
-for (const key of domGlobals) {
-  Object.defineProperty(globalThis, key, {
-    configurable: true,
-    value: domWindow[key],
-  })
-}
 
 const { act, useState } = await import('react')
 const { createRoot } = await import('react-dom/client')
@@ -66,6 +32,8 @@ const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { toast } = await import('sonner')
 const { AxiosError } = await import('axios')
 const { api } = await import('@/lib/api')
+const { useAuthStore } = await import('@/stores/auth-store')
+const originalAuth = useAuthStore.getState().auth
 const { DataTableBulkActions } = await import('../data-table-bulk-actions')
 const { USER_ROLE, USER_STATUS } = await import('../../constants')
 
@@ -132,7 +100,19 @@ function UsersSelection(props: { selectedIds: number[] }) {
           {row.original.username}
         </label>
       ))}
-      <DataTableBulkActions table={table} />
+      <DataTableBulkActions
+        table={table}
+        requestVerification={async (request) => {
+          assert.equal(request.scope, 'admin.user.manage')
+          assert.ok(request.context && 'user_id' in request.context)
+          return {
+            proof_token: `proof-${request.context.user_id}`,
+            scope: request.scope,
+            method: 'passkey',
+            expires_at: 2000000000,
+          }
+        }}
+      />
     </>
   )
 }
@@ -182,6 +162,13 @@ async function confirmDisable() {
 
 describe('bulk user disable', () => {
   beforeEach(() => {
+    useAuthStore.setState({
+      auth: {
+        ...originalAuth,
+        accessToken: 'test-access',
+        accessExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+      },
+    })
     requests = []
     respond = async () => ({ success: true })
     toastOffset = toast.getHistory().length
@@ -198,6 +185,10 @@ describe('bulk user disable', () => {
         action: string
       }
       requests.push(payload)
+      assert.equal(
+        config.headers.get('X-Security-Proof'),
+        `proof-${payload.id}`
+      )
       let data: ApiResponse
       try {
         data = await respond(payload.id)
@@ -216,6 +207,7 @@ describe('bulk user disable', () => {
   })
 
   afterEach(async () => {
+    useAuthStore.setState({ auth: originalAuth })
     await act(async () => root?.unmount())
     root = undefined
     queryClient.clear()
@@ -224,15 +216,9 @@ describe('bulk user disable', () => {
     document.body.replaceChildren()
   })
 
-  after(() => {
+  afterAll(() => {
     notifyManager.setScheduler((callback) => setTimeout(callback, 0))
     reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = originalActEnvironment
-    domWindow.close()
-    for (const key of domGlobals) {
-      const descriptor = originalGlobals.get(key)
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
-      else Reflect.deleteProperty(globalThis, key)
-    }
   })
 
   test('no selection hides the action toolbar', async () => {
@@ -293,7 +279,7 @@ describe('bulk user disable', () => {
     await act(async () => {
       clear.focus()
       clear.dispatchEvent(
-        new domWindow.KeyboardEvent('keydown', {
+        new KeyboardEvent('keydown', {
           key: 'End',
           bubbles: true,
         }) as unknown as Event

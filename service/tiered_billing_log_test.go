@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/assert"
@@ -21,8 +22,9 @@ func TestInjectTieredBillingMultiplierMatches(t *testing.T) {
 		{"failed settlement", nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			other := map[string]interface{}{}
-			InjectTieredBillingInfo(other, info, test.result)
+			logOther := model.NewLogOther()
+			InjectTieredBillingInfo(logOther, info, test.result)
+			other := logOther.Snapshot()
 			expression, err := base64.StdEncoding.DecodeString(other["expr_b64"].(string))
 			require.NoError(t, err)
 			assert.Equal(t, info.TieredBillingSnapshot.ExprString, string(expression))

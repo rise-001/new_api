@@ -21,6 +21,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Activity,
   Box,
+  ClipboardList,
   CreditCard,
   FileText,
   FlaskConical,
@@ -28,19 +29,22 @@ import {
   LayoutDashboard,
   ListTodo,
   MessageSquare,
+  PlugZap,
   Radio,
   ReceiptText,
   ServerCog,
   Settings,
+  ShieldCheck,
   Ticket,
   User,
   Users,
   Wallet,
+  Workflow,
 } from 'lucide-react'
 import { createElement, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { SidebarData } from '@/components/layout/types'
+import type { SidebarBadges, SidebarData } from '@/components/layout/types'
 import { useCustomMenus } from '@/hooks/use-custom-menus'
 import { CUSTOM_MENU_LOCATION, CUSTOM_MENU_OPEN_MODE } from '@/lib/custom-menus'
 import { ROLE } from '@/lib/roles'
@@ -61,7 +65,7 @@ function CustomMenuIcon(
  * These are shown when the URL does not match any nested sidebar view
  * registered in `layout/lib/sidebar-view-registry.ts`.
  */
-export function useSidebarData(): SidebarData {
+export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
   const { t } = useTranslation()
   const customMenuItems = useCustomMenus()
   const chatMenuItems = customMenuItems
@@ -136,6 +140,11 @@ export function useSidebarData(): SidebarData {
             icon: FileText,
           },
           {
+            title: t('Audit Logs'),
+            url: '/usage-logs/audit',
+            icon: ClipboardList,
+          },
+          {
             title: t('Task Logs'),
             url: '/usage-logs/task',
             activeUrls: ['/usage-logs/drawing'],
@@ -170,6 +179,11 @@ export function useSidebarData(): SidebarData {
             requiredRole: ROLE.ADMIN,
           },
           ...personalMenuItems,
+          {
+            title: t('Security & Access'),
+            url: '/security',
+            icon: ShieldCheck,
+          },
         ],
       },
       {
@@ -208,10 +222,25 @@ export function useSidebarData(): SidebarData {
             requiredRole: ROLE.SUPER_ADMIN,
           },
           {
+            title: t('Plugins'),
+            url: '/task-plugins',
+            icon: PlugZap,
+            requiredRole: ROLE.SUPER_ADMIN,
+          },
+          {
+            title: t('Request processing'),
+            url: '/request-processing',
+            icon: Workflow,
+            requiredRole: ROLE.SUPER_ADMIN,
+          },
+          {
             title: t('System Settings'),
             url: '/system-settings/site',
             activeUrls: ['/system-settings'],
             icon: Settings,
+            requiredRole: ROLE.SUPER_ADMIN,
+            // Model pricing lives in System Settings.
+            badge: badges.modelPricing,
           },
         ],
       },

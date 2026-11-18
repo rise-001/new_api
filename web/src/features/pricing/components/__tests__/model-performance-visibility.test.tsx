@@ -17,37 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { after, afterEach, describe, test } from 'node:test'
 
-import { Window } from 'happy-dom'
+import { afterEach, describe, test } from 'vitest'
 
 import type { PricingModel } from '../../types'
-
-const domWindow = new Window()
-const domGlobals = [
-  'window',
-  'document',
-  'navigator',
-  'HTMLElement',
-  'SVGElement',
-  'Node',
-  'Element',
-  'Event',
-  'CustomEvent',
-  'customElements',
-  'MutationObserver',
-  'requestAnimationFrame',
-  'cancelAnimationFrame',
-  'getComputedStyle',
-  'matchMedia',
-] as const
-
-for (const key of domGlobals) {
-  Object.defineProperty(globalThis, key, {
-    configurable: true,
-    value: domWindow[key],
-  })
-}
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
@@ -247,10 +220,6 @@ async function cleanupTabList(
 describe('model performance visibility', () => {
   afterEach(() => {
     useAuthStore.getState().auth.reset()
-  })
-
-  after(() => {
-    domWindow.close()
   })
 
   test('hides overview metrics and skips their query for a regular user', async () => {

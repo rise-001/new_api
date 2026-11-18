@@ -21,6 +21,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import type { TFunction } from 'i18next'
 import {
   Box,
+  Route,
   CreditCard,
   Layout,
   Settings,
@@ -35,10 +36,11 @@ import { getBillingSectionNavItems } from '@/features/system-settings/billing/se
 import { getContentSectionNavItems } from '@/features/system-settings/content/section-registry.tsx'
 import { getModelsSectionNavItems } from '@/features/system-settings/models/section-registry.tsx'
 import { getOperationsSectionNavItems } from '@/features/system-settings/operations/section-registry.tsx'
+import { getPolicySectionNavItems } from '@/features/system-settings/request-policies/section-registry'
 import { getSecuritySectionNavItems } from '@/features/system-settings/security/section-registry.tsx'
 import { getSiteSectionNavItems } from '@/features/system-settings/site/section-registry.tsx'
 
-import type { NavGroup, SidebarView } from '../types'
+import type { NavGroup, SidebarBadges, SidebarView } from '../types'
 
 function CustomMenuSettingsIcon(
   props: Omit<ComponentProps<typeof HugeiconsIcon>, 'icon'>
@@ -57,7 +59,10 @@ function CustomMenuSettingsIcon(
  * header already provides top-level context — the inner group label
  * scopes the items as "administration" actions.
  */
-function getSystemSettingsNavGroups(t: TFunction): NavGroup[] {
+function getSystemSettingsNavGroups(
+  t: TFunction,
+  badges: SidebarBadges
+): NavGroup[] {
   return [
     {
       id: 'system-administration',
@@ -76,12 +81,20 @@ function getSystemSettingsNavGroups(t: TFunction): NavGroup[] {
         {
           title: t('Billing & Payment'),
           icon: CreditCard,
-          items: getBillingSectionNavItems(t),
+          badge: badges.modelPricing,
+          items: getBillingSectionNavItems(t, {
+            'model-pricing': badges.modelPricing,
+          }),
         },
         {
-          title: t('Models & Routing'),
+          title: t('Models'),
           icon: Box,
           items: getModelsSectionNavItems(t),
+        },
+        {
+          title: t('Request policies'),
+          icon: Route,
+          items: getPolicySectionNavItems(t),
         },
         {
           title: t('Security & Limits'),

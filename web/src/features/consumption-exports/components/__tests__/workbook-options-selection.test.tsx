@@ -17,37 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { after, describe, test } from 'node:test'
 
-import { Window } from 'happy-dom'
-
-const domWindow = new Window()
-const domGlobals = [
-  'window',
-  'document',
-  'navigator',
-  'HTMLElement',
-  'HTMLInputElement',
-  'HTMLButtonElement',
-  'SVGElement',
-  'Node',
-  'Element',
-  'Event',
-  'CustomEvent',
-  'MutationObserver',
-  'ResizeObserver',
-  'requestAnimationFrame',
-  'cancelAnimationFrame',
-  'getComputedStyle',
-  'matchMedia',
-] as const
-
-for (const key of domGlobals) {
-  Object.defineProperty(globalThis, key, {
-    configurable: true,
-    value: domWindow[key],
-  })
-}
+import { describe, test } from 'vitest'
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
@@ -77,10 +48,6 @@ const reactTestGlobals = globalThis as typeof globalThis & {
 reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
 
 describe('consumption export workbook options', () => {
-  after(() => {
-    domWindow.close()
-  })
-
   test('switches directly between mutually exclusive workbook options', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -107,23 +74,23 @@ describe('consumption export workbook options', () => {
 
     const groupByToken = document.querySelector('#group-by-token')
     const dailySummary = document.querySelector('#daily-summary')
-    assert.ok(groupByToken instanceof HTMLElement)
-    assert.ok(dailySummary instanceof HTMLElement)
+    assert.ok(groupByToken instanceof HTMLInputElement)
+    assert.ok(dailySummary instanceof HTMLInputElement)
     assert.equal(groupByToken.hasAttribute('disabled'), false)
     assert.equal(dailySummary.hasAttribute('disabled'), false)
 
     await act(async () => groupByToken.click())
-    assert.equal(groupByToken.getAttribute('aria-checked'), 'true')
-    assert.equal(dailySummary.getAttribute('aria-checked'), 'false')
+    assert.equal(groupByToken.checked, true)
+    assert.equal(dailySummary.checked, false)
 
     await act(async () => dailySummary.click())
-    assert.equal(groupByToken.getAttribute('aria-checked'), 'false')
-    assert.equal(dailySummary.getAttribute('aria-checked'), 'true')
+    assert.equal(groupByToken.checked, false)
+    assert.equal(dailySummary.checked, true)
     assert.equal(groupByToken.hasAttribute('disabled'), false)
 
     await act(async () => groupByToken.click())
-    assert.equal(groupByToken.getAttribute('aria-checked'), 'true')
-    assert.equal(dailySummary.getAttribute('aria-checked'), 'false')
+    assert.equal(groupByToken.checked, true)
+    assert.equal(dailySummary.checked, false)
 
     await act(async () => root.unmount())
     container.remove()

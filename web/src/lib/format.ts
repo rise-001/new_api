@@ -22,6 +22,7 @@ import {
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyDisplay,
+  getCurrencyFractionDigits,
 } from './currency'
 
 // ============================================================================
@@ -36,6 +37,22 @@ export function formatNumber(
   return Intl.NumberFormat(locales, { maximumFractionDigits: 2 }).format(
     value as number
   )
+}
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
+
+/** A byte count in decimal units, for example 1.2 MB. */
+export function formatBytes(
+  bytes: number,
+  locales?: Intl.LocalesArgument
+): string {
+  let value = bytes
+  let unit = 0
+  while (Math.abs(value) >= 1000 && unit < BYTE_UNITS.length - 1) {
+    value /= 1000
+    unit += 1
+  }
+  return `${Intl.NumberFormat(locales, { maximumFractionDigits: 1 }).format(value)} ${BYTE_UNITS[unit]}`
 }
 
 export function formatCompactNumber(
@@ -104,16 +121,44 @@ export function parseQuotaFromDollars(amount: number): number {
  */
 export function quotaUnitsToDollars(units: number): number {
   const { config, meta } = getCurrencyDisplay()
+  return quotaUnitsToDisplayAmount(units, config.quotaPerUnit, meta)
+}
 
+function quotaUnitsToDisplayAmount(
+  units: number,
+  quotaPerUnit: number,
+  meta: ReturnType<typeof getCurrencyDisplay>['meta']
+): number {
   if (meta.kind === 'tokens') {
     return units
   }
 
-  const usdAmount = units / config.quotaPerUnit
-  const exchangeRate =
-    meta.kind === 'currency' || meta.kind === 'custom' ? meta.exchangeRate : 1
+  return (units / quotaPerUnit) * meta.exchangeRate
+}
 
-  return usdAmount * exchangeRate
+/**
+ * Convert quota units to a plain number suitable for an editable input.
+ * Uses the same precision as quota list formatting without symbols or suffixes.
+ */
+export function quotaUnitsToEditableAmount(units: number): number {
+  const { config, meta } = getCurrencyDisplay()
+  const amount = quotaUnitsToDisplayAmount(units, config.quotaPerUnit, meta)
+
+  if (meta.kind === 'tokens') {
+    return Math.round(amount)
+  }
+
+  return Number(amount.toFixed(getCurrencyFractionDigits(amount)))
+}
+
+/** Return the input step matching the configured editable quota precision. */
+export function getEditableQuotaStep(): number {
+  const { meta } = getCurrencyDisplay()
+  if (meta.kind === 'tokens') {
+    return 1
+  }
+
+  return 10 ** -getCurrencyFractionDigits(0)
 }
 
 // ============================================================================

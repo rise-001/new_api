@@ -17,28 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { after, afterEach, describe, test } from 'node:test'
 
-import { Window } from 'happy-dom'
-
-const domWindow = new Window({ url: 'http://localhost' })
-const domGlobals = [
-  'window',
-  'document',
-  'navigator',
-  'HTMLElement',
-  'Node',
-  'Element',
-  'Event',
-  'CustomEvent',
-] as const
-
-for (const key of domGlobals) {
-  Object.defineProperty(globalThis, key, {
-    configurable: true,
-    value: domWindow[key],
-  })
-}
+import { afterEach, describe, test } from 'vitest'
 
 const React = await import('react')
 const { act } = React
@@ -74,10 +54,6 @@ afterEach(() => {
   document.cookie = 'layout_variant=; path=/; max-age=0'
   document.body.removeAttribute('data-theme-preset')
   document.body.removeAttribute('data-theme-font')
-})
-
-after(() => {
-  domWindow.close()
 })
 
 describe('personalization defaults', () => {

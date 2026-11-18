@@ -88,14 +88,14 @@ func TestOAuthRegistrationIPSurvivesLaterLogin(t *testing.T) {
 			c.Request.RemoteAddr = "[2001:db8::42]:12345"
 			oauthUser := &oauth.OAuthUser{ProviderUserID: "external-user", Username: "oauth-user"}
 
-			user, err := findOrCreateOAuthUser(c, tt.provider, oauthUser, "")
+			user, _, err := findOrCreateOAuthUser(c, tt.provider, oauthUser, nil, "")
 			require.NoError(t, err)
 			var stored model.User
 			require.NoError(t, db.First(&stored, user.Id).Error)
 			assert.Equal(t, "2001:db8::42", stored.RegisterIP)
 
 			c.Request.RemoteAddr = "198.51.100.10:12345"
-			returningUser, err := findOrCreateOAuthUser(c, tt.provider, oauthUser, "")
+			returningUser, _, err := findOrCreateOAuthUser(c, tt.provider, oauthUser, nil, "")
 			require.NoError(t, err)
 			assert.Equal(t, user.Id, returningUser.Id)
 			assert.Equal(t, "2001:db8::42", returningUser.RegisterIP)

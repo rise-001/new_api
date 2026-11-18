@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+
+import { test } from 'vitest'
 
 import type { ApiKey } from '../../types'
 import {
@@ -46,6 +47,8 @@ test('saving a legacy auto key enables cross-group retry even if it was disabled
     created_time: 1,
     accessed_time: 1,
     group: 'auto',
+    auto_groups: null,
+    allow_user_quota_query: false,
     cross_group_retry: false,
     model_limits_enabled: false,
     model_limits: '',
