@@ -181,7 +181,9 @@ export function getModuleAccessFromStatus(
   status: Record<string, unknown> | null,
   module: HeaderNavModule
 ): ModuleAccess {
-  return parseHeaderNavModulesFromStatus(status)[module] ?? DEFAULTS[module]
+  const { enabled, requireAuth } =
+    parseHeaderNavModulesFromStatus(status)[module] ?? DEFAULTS[module]
+  return { enabled, requireAuth }
 }
 
 /**

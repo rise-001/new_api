@@ -264,6 +264,7 @@ async function renderUsersList(emptyInvitation = false) {
           {
             id: 2,
             username: 'long-user-name-for-table-layout',
+            register_ip: '192.0.2.17',
             display_name: 'A display name',
             role: 1,
             status: 1,
@@ -375,6 +376,7 @@ it('combines creation and last login into one column with full dates visible dir
     name: /long-user-name-for-table-layout/,
   })
   expect(within(row).getByText('—')).toBeInTheDocument()
+  expect(within(row).getByText('192.0.2.17')).toBeInTheDocument()
   const times = within(row).getAllByRole('time')
   expect(times).toHaveLength(2)
   expect(times[0]).toHaveTextContent(

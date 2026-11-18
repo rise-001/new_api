@@ -95,16 +95,22 @@ function sidebarFor(admin?: object, user?: object, canConfigure = true) {
 }
 
 describe('security sidebar visibility', () => {
-  it('old configurations show Security & Access immediately after Profile and keep API Keys', () => {
+  it('old configurations keep personal modules and API Keys with transfer records restricted to admins', () => {
     const { result } = sidebarFor(
       { personal: { enabled: true, personal: true, topup: true } },
       { personal: { enabled: true, personal: true } }
     )
+    const items = result.current.find((group) => group.id === 'personal')?.items
+    expect(items?.map((item) => item.title)).toEqual([
+      'Wallet',
+      'Consumption exports',
+      'Profile',
+      'Transfer Records',
+      'Security & Access',
+    ])
     expect(
-      result.current
-        .find((group) => group.id === 'personal')
-        ?.items.map((item) => item.title)
-    ).toEqual(['Wallet', 'Profile', 'Security & Access'])
+      items?.find((item) => item.title === 'Transfer Records')?.requiredRole
+    ).toBe(ROLE.ADMIN)
     expect(
       result.current
         .flatMap((group) => group.items)

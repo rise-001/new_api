@@ -165,12 +165,7 @@ describe('security page migration', () => {
       screen
         .getAllByRole('region')
         .map((region) => within(region).getAllByRole('heading')[0].textContent)
-    ).toEqual([
-      'Login & Authentication',
-      'Sessions & Access',
-      'Account Actions',
-      'Privacy',
-    ])
+    ).toEqual(['Login & Authentication', 'Sessions & Access', 'Privacy'])
     expect(
       within(login).getByRole('button', { name: 'Change Password' })
     ).toBeVisible()
@@ -199,11 +194,8 @@ describe('security page migration', () => {
       screen.getByRole('switch', { name: 'Record IP Address' })
     ).toBeVisible()
     expect(
-      within(screen.getByRole('region', { name: 'Account Actions' })).getByRole(
-        'button',
-        { name: 'Delete Account' }
-      )
-    ).toBeVisible()
+      screen.queryByRole('button', { name: 'Delete Account' })
+    ).not.toBeInTheDocument()
   })
 
   it('built-in and custom bindings share one compact responsive grid', async () => {
@@ -268,11 +260,11 @@ describe('security page migration', () => {
     await renderPage()
     expect(await screen.findByText('Failed to load profile')).toBeVisible()
     expect(
-      screen.queryByRole('button', { name: 'Delete Account' })
+      screen.queryByRole('button', { name: 'Change Password' })
     ).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
     expect(
-      await screen.findByRole('button', { name: 'Delete Account' })
+      await screen.findByRole('button', { name: 'Change Password' })
     ).toBeVisible()
   })
 })
