@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -291,6 +292,92 @@ func TestAdminUserProofIsBoundToTargetAndActionAndConsumedOnce(t *testing.T) {
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	assert.Equal(t, http.StatusForbidden, response.Code)
 	assert.Equal(t, "SECURITY_PROOF_CONSUMED", result.Code)
+}
+
+func TestAdminBatchDisableUsesOneOperationProof(t *testing.T) {
+	operator, identity, target := setupAdminUserTest(t)
+	other := &model.User{Username: "batch-user", Password: target.Password, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, AffCode: "batch-aff"}
+	require.NoError(t, model.DB.Create(other).Error)
+	session, err := service.CreateLoginSession(target.Id, "password", "127.0.0.1", "batch-target")
+	require.NoError(t, err)
+	passwordEnabled := common.PasswordLoginEnabled
+	common.PasswordLoginEnabled = true
+	t.Cleanup(func() { common.PasswordLoginEnabled = passwordEnabled })
+
+	const path = "/api/user/batch_disable"
+	body := fmt.Sprintf(`{"user_ids":[%d,%d,%d]}`, other.Id, target.Id, operator.Id)
+	request := func(body, proof string) *httptest.ResponseRecorder {
+		return adminUserRequest(http.MethodPost, path, body, proof, identity, common.RoleRootUser, nil, BatchDisableUsers)
+	}
+	assertRejected := func(response *httptest.ResponseRecorder, code string) {
+		t.Helper()
+		assert.Equal(t, http.StatusForbidden, response.Code)
+		assert.Equal(t, code, decodeSecurityEnrollmentResponse(t, response).Code)
+		for _, id := range []int{target.Id, other.Id, operator.Id} {
+			stored, err := model.GetUserById(id, false)
+			require.NoError(t, err)
+			assert.Equal(t, common.UserStatusEnabled, stored.Status)
+		}
+	}
+	assertRejected(request(body, ""), "SECURITY_PROOF_REQUIRED")
+
+	input := service.VerificationInput{
+		Method: service.VerificationMethodPassword, Scope: service.VerificationScopeAdminUserBatchDisable,
+		Context:  []byte(fmt.Sprintf(`{"user_ids":[%d,%d,%d]}`, operator.Id, target.Id, other.Id)),
+		Password: "wrong-password",
+	}
+	_, err = service.VerifySecurityInput(identity, input)
+	require.ErrorIs(t, err, service.ErrVerificationFailed)
+	input.Password = "enrollment-password"
+	proof, err := service.VerifySecurityInput(identity, input)
+	require.NoError(t, err)
+	assertRejected(request(fmt.Sprintf(`{"user_ids":[%d,%d]}`, target.Id, other.Id), proof.ProofToken), "SECURITY_PROOF_CONTEXT_MISMATCH")
+	duplicate := request(fmt.Sprintf(`{"user_ids":[%d,%d]}`, target.Id, target.Id), proof.ProofToken)
+	assert.Equal(t, http.StatusBadRequest, duplicate.Code)
+	assert.Equal(t, "SECURITY_CONTEXT_INVALID", decodeSecurityEnrollmentResponse(t, duplicate).Code)
+
+	require.NoError(t, model.DB.Model(&model.AuthFlow{}).Where("purpose = ?", model.AuthFlowPurposeSecurityProof).Update("expires_at", time.Now().Add(-time.Minute)).Error)
+	assertRejected(request(body, proof.ProofToken), "SECURITY_PROOF_EXPIRED")
+	proof, err = service.VerifySecurityInput(identity, input)
+	require.NoError(t, err)
+
+	response := request(body, proof.ProofToken)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	var result struct {
+		Success bool
+		Data    struct {
+			Succeeded []int `json:"succeeded_ids"`
+			Failed    []int `json:"failed_ids"`
+		}
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	assert.ElementsMatch(t, []int{target.Id, other.Id}, result.Data.Succeeded)
+	assert.Equal(t, []int{operator.Id}, result.Data.Failed)
+	for _, id := range []int{target.Id, other.Id} {
+		stored, err := model.GetUserById(id, false)
+		require.NoError(t, err)
+		assert.Equal(t, common.UserStatusDisabled, stored.Status)
+	}
+	storedOperator, err := model.GetUserById(operator.Id, false)
+	require.NoError(t, err)
+	assert.Equal(t, common.UserStatusEnabled, storedOperator.Status)
+	targetIdentity, err := service.ParseAccessToken(session.AccessToken)
+	require.NoError(t, err)
+	var storedSession model.UserSession
+	require.NoError(t, model.DB.Where("sid = ?", targetIdentity.SessionID).First(&storedSession).Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, storedSession.Status)
+
+	replay := request(body, proof.ProofToken)
+	assert.Equal(t, http.StatusForbidden, replay.Code)
+	assert.Equal(t, "SECURITY_PROOF_CONSUMED", decodeSecurityEnrollmentResponse(t, replay).Code)
+	var audits []model.AuditLog
+	require.NoError(t, model.LOG_DB.Where("action = ?", "user.manage").Find(&audits).Error)
+	require.Len(t, audits, 2)
+	auditJSON, err := common.Marshal(audits)
+	require.NoError(t, err)
+	assert.NotContains(t, string(auditJSON), input.Password)
+	assert.NotContains(t, string(auditJSON), proof.ProofToken)
 }
 
 func TestAdminUserBindingProofDistinguishesBuiltInAndCustomBindings(t *testing.T) {

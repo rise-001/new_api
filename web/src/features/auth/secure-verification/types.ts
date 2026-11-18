@@ -43,6 +43,7 @@ export type SecurityProofScope =
   | 'admin.user.update'
   | 'admin.user.delete'
   | 'admin.user.manage'
+  | 'admin.user.batch_disable'
   | 'admin.user.passkey.reset'
   | 'admin.user.2fa.disable'
   | 'admin.user.binding.clear'
@@ -69,6 +70,10 @@ export type VerificationOperation =
   | {
       scope: 'admin.user.manage'
       context: { user_id: number; action: AdminUserManageAction }
+    }
+  | {
+      scope: 'admin.user.batch_disable'
+      context: { user_ids: number[] }
     }
   | {
       scope: 'admin.user.binding.clear'

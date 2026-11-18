@@ -28,7 +28,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table/toolbar/bulk-actions'
 import { Button } from '@/components/ui/button'
 
-import { manageUser } from '../api'
+import { batchDisableUsers } from '../api'
 import { isUserDeleted, USER_ROLE, USER_STATUS } from '../constants'
 import type { User } from '../types'
 import type { useUsers } from './users-provider'
@@ -55,64 +55,58 @@ export function DataTableBulkActions(props: DataTableBulkActionsProps) {
 
   const disableMutation = useMutation({
     mutationFn: async (users: User[]) => {
-      const succeededIds: number[] = []
-      const failedIds: number[] = []
-
-      for (const user of users) {
-        let proof
-        try {
-          proof = await props.requestVerification({
-            scope: 'admin.user.manage',
-            context: { user_id: user.id, action: 'disable' },
-            title: t('Disable selected users'),
-            description: t(
-              'Confirm your identity before changing the account {{username}}.',
-              {
-                username: user.username,
-              }
-            ),
-          })
-        } catch {
-          break
-        }
-        if (!proof) break
-        try {
-          const result = await manageUser(user.id, 'disable', proof.proof_token)
-          if (result.success) succeededIds.push(user.id)
-          else failedIds.push(user.id)
-        } catch {
-          failedIds.push(user.id)
-        }
+      const userIds = users.map((user) => user.id)
+      let proof
+      try {
+        proof = await props.requestVerification({
+          scope: 'admin.user.batch_disable',
+          context: { user_ids: userIds },
+          title: t('Disable selected users'),
+          description: t(
+            'Disable {{count}} selected user(s)? They will no longer be able to sign in or use the API. Already disabled, deleted, and root users are skipped.',
+            { count: userIds.length }
+          ),
+        })
+      } catch {
+        return null
       }
-
-      return { succeededIds, failedIds }
+      if (!proof) return null
+      try {
+        const result = await batchDisableUsers(userIds, proof.proof_token)
+        if (result.success && result.data) return result.data
+      } catch {
+        // Keep the selection and refresh after an uncertain response.
+      }
+      return { succeeded_ids: [], failed_ids: userIds }
     },
     onSuccess: async (result) => {
+      setUsersToDisable(null)
+      if (!result) return
+
       props.table.setRowSelection((selection) => {
         const next = { ...selection }
-        for (const id of result.succeededIds) {
+        for (const id of result.succeeded_ids) {
           delete next[String(id)]
         }
         return next
       })
 
-      if (result.succeededIds.length > 0) {
+      if (result.succeeded_ids.length > 0) {
         toast.success(
           t('Disabled {{count}} user(s)', {
-            count: result.succeededIds.length,
+            count: result.succeeded_ids.length,
           })
         )
       }
-      if (result.failedIds.length > 0) {
+      if (result.failed_ids.length > 0) {
         toast.error(
           t('Failed to disable {{count}} user(s). Please try again.', {
-            count: result.failedIds.length,
+            count: result.failed_ids.length,
           })
         )
       }
 
       await queryClient.invalidateQueries({ queryKey: ['users'] })
-      setUsersToDisable(null)
     },
   })
 

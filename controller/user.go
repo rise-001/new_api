@@ -1091,6 +1091,54 @@ type ManageRequest struct {
 	Mode   string `json:"mode"`
 }
 
+func BatchDisableUsers(c *gin.Context) {
+	var request service.AdminUserBatchDisableContext
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil ||
+		len(request.UserIDs) == 0 || len(request.UserIDs) > service.MaxAdminUserBatchDisable {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	operatorRole := c.GetInt("role")
+	if operatorRole < common.RoleAdminUser {
+		common.ApiErrorStatus(c, http.StatusForbidden, common.NewMessage("You do not have permission to perform this action."))
+		return
+	}
+	authorization := requireAdminUserProof(c, service.VerificationScopeAdminUserBatchDisable, request)
+	if authorization == nil {
+		return
+	}
+	succeededIDs := make([]int, 0, len(request.UserIDs))
+	failedIDs := make([]int, 0)
+	for _, id := range request.UserIDs {
+		user := model.User{Id: id}
+		disabled, err := user.DisableByAdmin(operatorRole)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.LogError(c, common.LogText("Failed to disable user %d: %s", id, err.Error()))
+		}
+		if !disabled {
+			failedIDs = append(failedIDs, id)
+			continue
+		}
+		if err := model.InvalidateUserTokensCache(id); err != nil {
+			common.SysLog(common.LogText("failed to invalidate tokens cache for user %d: %s", id, err.Error()))
+		}
+		recordManageAuditFor(c, id, "user.manage", map[string]any{
+			"action":              "disable",
+			"username":            user.Username,
+			"id":                  id,
+			"verification_method": authorization.Method,
+		})
+		succeededIDs = append(succeededIDs, id)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"succeeded_ids": succeededIDs,
+			"failed_ids":    failedIDs,
+		},
+	})
+}
+
 // ManageUser Only admin user can do this
 func ManageUser(c *gin.Context) {
 	var req ManageRequest

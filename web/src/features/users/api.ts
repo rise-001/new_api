@@ -162,6 +162,17 @@ export async function manageUser(
   return res.data
 }
 
+export async function batchDisableUsers(userIds: number[], proofToken: string) {
+  const res = await api.post<
+    ApiResponse<{ succeeded_ids: number[]; failed_ids: number[] }>
+  >(
+    '/api/user/batch_disable',
+    { user_ids: userIds },
+    securityProofConfig(proofToken)
+  )
+  return res.data
+}
+
 /**
  * Adjust user quota atomically (add/subtract/override)
  */

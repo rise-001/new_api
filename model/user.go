@@ -801,14 +801,36 @@ func (user *User) Update(updatePassword bool) error {
 	}); err != nil {
 		return err
 	}
-	if err := updateUserCache(*user); err != nil {
-		return err
-	}
+	return user.finishSecurityUpdate(previousAuthVersion)
+}
+
+func (user *User) finishSecurityUpdate(previousAuthVersion int64) error {
+	cacheErr := updateUserCache(*user)
 	if user.AuthVersion > previousAuthVersion {
 		_, err := RevokeAllUserSessions(user.Id, "user_security_changed")
-		return err
+		return errors.Join(cacheErr, err)
 	}
-	return nil
+	return cacheErr
+}
+
+// DisableByAdmin checks eligibility under the same lock as the status change.
+// The bool reports whether the status change committed, even if cleanup failed.
+func (user *User) DisableByAdmin(operatorRole int) (bool, error) {
+	var previousAuthVersion int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var current User
+		if err := lockForUpdate(tx).Where("id = ? AND status = ? AND role < ? AND role < ?",
+			user.Id, common.UserStatusEnabled, operatorRole, common.RoleRootUser).First(&current).Error; err != nil {
+			return err
+		}
+		previousAuthVersion = current.AuthVersion
+		user.Status = common.UserStatusDisabled
+		return user.UpdateWithTx(tx, false)
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, user.finishSecurityUpdate(previousAuthVersion)
 }
 
 func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {

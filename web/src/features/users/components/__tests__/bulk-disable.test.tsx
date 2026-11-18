@@ -48,8 +48,13 @@ notifyManager.setScheduler(queueMicrotask)
 
 const originalAdapter = api.defaults.adapter
 let serverUsers: User[]
-let requests: { id: number; action: string }[]
-let respond: (id: number) => Promise<ApiResponse>
+type BatchResponse = ApiResponse<{
+  succeeded_ids: number[]
+  failed_ids: number[]
+}>
+let requests: { user_ids: number[] }[]
+let verifiedBatches: number[][]
+let respond: (ids: number[]) => Promise<BatchResponse>
 let root: ReturnType<typeof createRoot> | undefined
 let queryClient: InstanceType<typeof QueryClient>
 let toastOffset: number
@@ -103,10 +108,11 @@ function UsersSelection(props: { selectedIds: number[] }) {
       <DataTableBulkActions
         table={table}
         requestVerification={async (request) => {
-          assert.equal(request.scope, 'admin.user.manage')
-          assert.ok(request.context && 'user_id' in request.context)
+          assert.equal(request.scope, 'admin.user.batch_disable')
+          assert.ok('user_ids' in request.context)
+          verifiedBatches.push(request.context.user_ids)
           return {
-            proof_token: `proof-${request.context.user_id}`,
+            proof_token: 'batch-proof',
             scope: request.scope,
             method: 'passkey',
             expires_at: 2000000000,
@@ -170,7 +176,11 @@ describe('bulk user disable', () => {
       },
     })
     requests = []
-    respond = async () => ({ success: true })
+    verifiedBatches = []
+    respond = async (ids) => ({
+      success: true,
+      data: { succeeded_ids: ids, failed_ids: [] },
+    })
     toastOffset = toast.getHistory().length
     queryClient = new QueryClient({
       defaultOptions: {
@@ -179,25 +189,21 @@ describe('bulk user disable', () => {
       },
     })
     api.defaults.adapter = async (config) => {
-      assert.equal(config.url, '/api/user/manage')
+      assert.equal(config.url, '/api/user/batch_disable')
       const payload = JSON.parse(config.data as string) as {
-        id: number
-        action: string
+        user_ids: number[]
       }
       requests.push(payload)
-      assert.equal(
-        config.headers.get('X-Security-Proof'),
-        `proof-${payload.id}`
-      )
-      let data: ApiResponse
+      assert.equal(config.headers.get('X-Security-Proof'), 'batch-proof')
+      let data: BatchResponse
       try {
-        data = await respond(payload.id)
+        data = await respond(payload.user_ids)
       } catch {
         throw new AxiosError('Network unavailable', 'ERR_NETWORK', config)
       }
       if (data.success) {
         serverUsers = serverUsers.map((item) =>
-          item.id === payload.id
+          data.data?.succeeded_ids.includes(item.id)
             ? { ...item, status: USER_STATUS.DISABLED }
             : item
         )
@@ -312,10 +318,8 @@ describe('bulk user disable', () => {
       /Disable 2 selected user/
     )
     await confirmDisable()
-    assert.deepEqual(requests, [
-      { id: 11, action: 'disable' },
-      { id: 12, action: 'disable' },
-    ])
+    assert.deepEqual(verifiedBatches, [[11, 12]])
+    assert.deepEqual(requests, [{ user_ids: [11, 12] }])
     const refreshed = queryClient.getQueryData<User[]>([
       'users',
       'bulk-disable-test',
@@ -343,12 +347,13 @@ describe('bulk user disable', () => {
     assert.equal(notification.title, 'Disabled 2 user(s)')
   })
 
-  test('business and network failures retain only failed selections after reordered refresh', async () => {
-    respond = async (id) => {
-      if (id === 12) return { success: false, message: 'Permission denied' }
-      if (id === 13) throw new Error('Network unavailable')
+  test('partial failures retain only failed selections after reordered refresh', async () => {
+    respond = async () => {
       serverUsers = [...serverUsers].reverse()
-      return { success: true }
+      return {
+        success: true,
+        data: { succeeded_ids: [11], failed_ids: [12, 13] },
+      }
     }
     await renderUsers([user(11), user(12), user(13)])
     await act(async () =>
@@ -383,8 +388,10 @@ describe('bulk user disable', () => {
     )
   })
 
-  test('all requests failing preserves the selection for retry without a success message', async () => {
-    respond = async () => ({ success: false, message: 'Permission denied' })
+  test('a network failure preserves the selection for retry without a success message', async () => {
+    respond = async () => {
+      throw new Error('Network unavailable')
+    }
     await renderUsers([user(11)])
     await act(async () =>
       document
@@ -415,7 +422,7 @@ describe('bulk user disable', () => {
   })
 
   test('pending requests prevent duplicate confirmation and canceling', async () => {
-    let finish: (result: ApiResponse) => void = () => undefined
+    let finish: (result: BatchResponse) => void = () => undefined
     respond = () =>
       new Promise((resolve) => {
         finish = resolve
@@ -446,6 +453,8 @@ describe('bulk user disable', () => {
     assert.equal(cancel.disabled, true)
     await act(async () => confirm.click())
     assert.equal(requests.length, 1)
-    await act(async () => finish({ success: true }))
+    await act(async () =>
+      finish({ success: true, data: { succeeded_ids: [11], failed_ids: [] } })
+    )
   })
 })
