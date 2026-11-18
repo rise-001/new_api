@@ -66,7 +66,7 @@ function getAnnouncementKey(item: Record<string, unknown>): string {
 export function useNotifications() {
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'notice' | 'announcements'>(
-    'notice'
+    'announcements'
   )
 
   // Fetch Notice from API
@@ -133,24 +133,24 @@ export function useNotifications() {
   }
 
   // Handle popover open
-  const handleOpenPopover = (tab?: 'notice' | 'announcements') => {
-    const nextTab = tab || activeTab
-
+  const handleOpenPopover = (
+    tab: 'notice' | 'announcements' = 'announcements'
+  ) => {
     // Mark currently visible content as read when opening the notification center
     if (noticeContent) {
       markNoticeRead(noticeContent)
     }
-    if (nextTab === 'announcements') {
+    if (tab === 'announcements') {
       markAnnouncementsAsRead()
     }
 
-    setActiveTab(nextTab)
+    setActiveTab(tab)
     setPopoverOpen(true)
   }
 
   const handlePopoverOpenChange = (open: boolean) => {
     if (open) {
-      handleOpenPopover(activeTab)
+      handleOpenPopover()
       return
     }
 
