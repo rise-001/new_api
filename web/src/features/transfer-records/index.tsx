@@ -25,10 +25,10 @@ function ModeBadge(props: { mode: string }) {
     variant = 'danger'
   } else if (props.mode === 'override') {
     label = t('Override')
-    variant = 'info'
+    variant = 'warning'
   } else if (props.mode === 'topup') {
     label = t('Recharge')
-    variant = 'success'
+    variant = 'info'
   } else if (props.mode === 'redemption') {
     label = t('Redemption Code Redemption')
     variant = 'purple'

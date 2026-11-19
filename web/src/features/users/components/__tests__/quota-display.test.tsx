@@ -266,6 +266,7 @@ async function renderUsersList(emptyInvitation = false) {
             username: 'long-user-name-for-table-layout',
             register_ip: '192.0.2.17',
             display_name: 'A display name',
+            email: 'registered@example.com',
             role: 1,
             status: 1,
             quota: 1900,
@@ -319,6 +320,10 @@ async function renderUsersList(emptyInvitation = false) {
 
 it('sends balance sorting to the server and keeps invitation details on two lines', async () => {
   const get = await renderUsersList()
+  expect(
+    screen.getByRole('columnheader', { name: 'Email' })
+  ).toBeInTheDocument()
+  expect(screen.getByText('registered@example.com')).toBeInTheDocument()
   expect(
     screen.getByRole('columnheader', { name: 'User Group' })
   ).toBeInTheDocument()
