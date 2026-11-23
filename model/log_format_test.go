@@ -243,19 +243,40 @@ func TestLogFormattingPreservesLargeIntegerLexemes(t *testing.T) {
 	})
 }
 
-func TestFormatUserLogsStripsModelMapping(t *testing.T) {
-	other := common.MapToJsonStr(map[string]interface{}{
+func TestFormatLogsScopesModelDiagnostics(t *testing.T) {
+	other := common.MapToJsonStr(map[string]any{
 		"is_model_mapped":     true,
 		"upstream_model_name": "upstream-model",
-		"model_price":         0.004,
+		"response_model": map[string]string{
+			"requested_model": "requested-model",
+			"upstream_model":  "upstream-model",
+			"returned_model":  "returned-model",
+		},
+		"request_path": "/v1/chat/completions",
 	})
-	logs := []*Log{{Other: other}}
 
-	formatUserLogs(logs, 0)
+	t.Run("user", func(t *testing.T) {
+		logs := []*Log{{ModelName: "requested-model", Other: other}}
 
-	parsed, err := common.StrToMap(logs[0].Other)
-	require.NoError(t, err)
-	require.NotContains(t, parsed, "is_model_mapped")
-	require.NotContains(t, parsed, "upstream_model_name")
-	require.Contains(t, parsed, "model_price")
+		formatUserLogs(logs, 0)
+
+		assert.JSONEq(t, `{"request_path":"/v1/chat/completions"}`, logs[0].Other)
+		assert.Equal(t, "requested-model", logs[0].ModelName)
+	})
+
+	t.Run("admin", func(t *testing.T) {
+		logs := []*Log{{Other: other}}
+
+		FormatAdminLogs(logs)
+
+		assert.JSONEq(t, other, logs[0].Other)
+	})
+
+	t.Run("root", func(t *testing.T) {
+		logs := []*Log{{Other: other}}
+
+		FormatRootLogs(logs)
+
+		assert.JSONEq(t, other, logs[0].Other)
+	})
 }
