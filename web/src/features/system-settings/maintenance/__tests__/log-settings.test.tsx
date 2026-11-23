@@ -42,6 +42,7 @@ function Fixture() {
         <LogSettingsSection
           defaultValues={{
             LogConsumeEnabled: true,
+            ClientErrorMaskPatterns: '',
             'log_setting.user_export_enabled': true,
             'log_setting.max_range_days': 30,
             'system_task_setting.retention_days': 30,
@@ -180,6 +181,25 @@ test('saving sends only the log export settings that changed', async () => {
   })
 })
 
+test('saving client error patterns preserves separate lines and case flags', async () => {
+  const user = userEvent.setup()
+  await renderSettings()
+  const patterns = '(?i)no available channel\n无可用渠道'
+  fireEvent.change(
+    screen.getByRole('textbox', { name: 'Client error masking patterns' }),
+    {
+      target: { value: patterns },
+    }
+  )
+  await user.click(screen.getByRole('button', { name: 'Save log settings' }))
+  await waitFor(() =>
+    expect(api.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'ClientErrorMaskPatterns',
+      value: patterns,
+    })
+  )
+})
+
 test('a time range under one day shows a field error and is not saved', async () => {
   const user = userEvent.setup()
   const days = await renderSettings()
@@ -189,6 +209,24 @@ test('a time range under one day shows a field error and is not saved', async ()
 
   await waitFor(() => expect(days).toHaveAttribute('aria-invalid', 'true'))
   expect(api.put).not.toHaveBeenCalled()
+})
+
+test('an invalid pattern shows its line number and keeps the draft', async () => {
+  const user = userEvent.setup()
+  vi.mocked(api.put).mockResolvedValueOnce({
+    data: { success: false, message: 'Invalid regular expression on line 2' },
+  })
+  await renderSettings()
+  const field = screen.getByRole('textbox', {
+    name: 'Client error masking patterns',
+  })
+  fireEvent.change(field, { target: { value: 'first\n[' } })
+  await user.click(screen.getByRole('button', { name: 'Save log settings' }))
+  await waitFor(() => expect(field).toHaveAttribute('aria-invalid', 'true'))
+  expect(field).toHaveAccessibleDescription(
+    /Invalid regular expression on line 2/
+  )
+  expect(field).toHaveValue('first\n[')
 })
 
 test('the task retention saves whole days and rejects less than one day', async () => {

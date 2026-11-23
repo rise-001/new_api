@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -112,7 +113,6 @@ func newResponsesWSRequestRunner(c *gin.Context) relay.ResponsesWSRequestRunner 
 }
 
 func ResponsesWebSocket(c *gin.Context) {
-	requestID := c.GetString(common.RequestIdKey)
 	runner := newResponsesWSRequestRunner(c)
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -122,7 +122,7 @@ func ResponsesWebSocket(c *gin.Context) {
 
 	if apiError := relay.ResponsesWebSocketHelper(c, ws, runner); apiError != nil {
 		logger.LogError(c, common.LogText("responses websocket relay error: %s", common.LocalLogPreview(apiError.Error())))
-		apiError.SetMessage(common.MessageWithRequestId(apiError.Error(), requestID))
-		helper.WssError(c, ws, apiError.ToOpenAIError(common.UpstreamAddresses(c)...))
+		clientErr := service.ClientRelayError(c, apiError, true)
+		helper.WssError(c, ws, clientErr.ToOpenAIError(common.UpstreamAddresses(c)...))
 	}
 }

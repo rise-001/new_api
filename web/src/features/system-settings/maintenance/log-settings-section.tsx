@@ -34,6 +34,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 
 import {
   SettingsForm,
@@ -49,6 +51,7 @@ import { HistoryLogCleanup } from './history-log-cleanup'
 import { ServerLogFiles } from './server-log-files'
 
 const logSettingsSchema = z.object({
+  ClientErrorMaskPatterns: z.string(),
   LogConsumeEnabled: z.boolean(),
   log_setting: z.object({
     user_export_enabled: z.boolean(),
@@ -63,6 +66,7 @@ type LogSettingsFormValues = z.infer<typeof logSettingsSchema>
 
 type LogSettingsSectionProps = {
   defaultValues: {
+    ClientErrorMaskPatterns: string
     LogConsumeEnabled: boolean
     'log_setting.user_export_enabled': boolean
     'log_setting.max_range_days': number
@@ -78,6 +82,7 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
   const taskHistoryTitleId = useId()
   const formDefaults = useMemo<LogSettingsFormValues>(
     () => ({
+      ClientErrorMaskPatterns: props.defaultValues.ClientErrorMaskPatterns,
       LogConsumeEnabled: props.defaultValues.LogConsumeEnabled,
       log_setting: {
         user_export_enabled:
@@ -102,6 +107,7 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
 
   const onSubmit = async (values: LogSettingsFormValues) => {
     const changes = [
+      ['ClientErrorMaskPatterns', values.ClientErrorMaskPatterns],
       ['LogConsumeEnabled', values.LogConsumeEnabled],
       [
         'log_setting.user_export_enabled',
@@ -115,7 +121,14 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
     ] as const
     for (const [key, value] of changes) {
       if (value === props.defaultValues[key]) continue
-      await updateOption.mutateAsync({ key, value })
+      try {
+        await updateOption.mutateAsync({ key, value })
+      } catch (error) {
+        if (key === 'ClientErrorMaskPatterns') {
+          form.setError(key, { message: getServerErrorMessage(error) })
+        }
+        return
+      }
     }
   }
 
@@ -157,6 +170,24 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
                   </FormControl>
                   <FormMessage />
                 </SettingsSwitchItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='ClientErrorMaskPatterns'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Client error masking patterns')}</FormLabel>
+                  <FormControl>
+                    <Textarea rows={3} spellCheck={false} {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Enter one Go regular expression per line. Clients see a support message and request ID for matching errors. Administrators see the original error.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
               )}
             />
           </div>

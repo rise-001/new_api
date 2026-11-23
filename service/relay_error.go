@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -14,6 +15,49 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
+
+// ClientErrorMessage formats the message sent to an API client. A match always
+// carries the gateway request ID, including on protocols that normally omit it.
+func ClientErrorMessage(c *gin.Context, message string, withRequestID bool) (string, bool) {
+	matched := operation_setting.MatchesClientError(message)
+	if matched {
+		lang := i18n.StatedLang(c)
+		if lang == "" && common.DefaultLanguage == "" {
+			lang = i18n.LangZhCN
+		}
+		message = i18n.Translate(lang, i18n.MsgRelayMaskedClientError)
+	}
+	if matched || withRequestID {
+		message = common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))
+	}
+	return message, matched
+}
+
+// ClientRelayError keeps the upstream error available to logs and report hooks.
+// The protocol converters can read either Err or the upstream protocol's DTO.
+func ClientRelayError(c *gin.Context, err *types.NewAPIError, withRequestID bool) *types.NewAPIError {
+	if err == nil {
+		return nil
+	}
+	message, masked := ClientErrorMessage(c, err.Error(), withRequestID)
+	if !masked && !withRequestID {
+		return err
+	}
+	client := *err
+	client.SetMessage(message)
+	if masked {
+		client.Metadata = nil
+		switch payload := client.RelayError.(type) {
+		case types.OpenAIError:
+			payload.Message, payload.Metadata, payload.Param = message, nil, ""
+			client.RelayError = payload
+		case types.ClaudeError:
+			payload.Message = message
+			client.RelayError = payload
+		}
+	}
+	return &client
+}
 
 // DecideRelayRetry is the single retry decision for relay attempts. The reason
 // is recorded in the request policy decision events of the log details.

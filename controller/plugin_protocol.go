@@ -1247,7 +1247,8 @@ func respondPluginProtocolSubmissionError(c *gin.Context, taskErr *dto.TaskError
 	if requestplugin.Stopped(taskErr) {
 		// A request plugin's stop keeps its code and message, as on chat
 		// routes.
-		respondPluginProtocolError(c, status, taskErr.Code, common.MessageWithRequestId(taskErr.Message, c.GetString(common.RequestIdKey)))
+		message, _ := service.ClientErrorMessage(c, taskErr.Message, true)
+		c.JSON(status, gin.H{"error": gin.H{"message": message, "type": "new_api_error", "code": taskErr.Code}})
 		return
 	}
 	switch status {
@@ -1269,6 +1270,7 @@ func respondPluginProtocolSubmissionError(c *gin.Context, taskErr *dto.TaskError
 }
 
 func respondPluginProtocolError(c *gin.Context, status int, code, message string) {
+	message, _ = service.ClientErrorMessage(c, message, false)
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"message": message,

@@ -1649,6 +1649,10 @@ func RespondTaskPluginError(c *gin.Context, taskErr *dto.TaskError) bool {
 	}
 	requestID := c.GetString(common.RequestIdKey)
 	hasRenderer, err := pinned.Plugin.Engine.HasCallablePath(c.Request.Context(), "native", "error")
+	maskedMessage, masked := service.ClientErrorMessage(c, taskErr.Message, false)
+	if masked {
+		sanitized.Message = maskedMessage
+	}
 	requestValue, exists := c.Get(pluginruntime.ContextKeyRouteRequest)
 	requestContext, ok := requestValue.(pluginruntime.RouteRequestContext)
 	if err == nil && hasRenderer && exists && ok {
@@ -1688,7 +1692,7 @@ func RespondTaskPluginError(c *gin.Context, taskErr *dto.TaskError) bool {
 			sanitized.Code),
 	)
 	message := sanitized.Message
-	if requestID != "" {
+	if requestID != "" && !masked {
 		message = common.MessageWithRequestId(sanitized.Message, requestID)
 	}
 	c.JSON(sanitized.HTTPStatus, &dto.TaskError{
@@ -1710,7 +1714,9 @@ func abortTaskPluginRouteErrorDetail(c *gin.Context, status int, detail string) 
 		return
 	}
 	message := taskErr.Message
-	if requestID := c.GetString(common.RequestIdKey); requestID != "" {
+	if masked, ok := service.ClientErrorMessage(c, detail, false); ok {
+		message = masked
+	} else if requestID := c.GetString(common.RequestIdKey); requestID != "" {
 		message = common.MessageWithRequestId(taskErr.Message, requestID)
 	}
 	c.JSON(taskErr.HTTPStatus, &dto.TaskError{

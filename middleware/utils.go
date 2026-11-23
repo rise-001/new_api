@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,9 +24,10 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 		Message:    message,
 		StatusCode: statusCode,
 	}) {
+		clientMessage, _ := service.ClientErrorMessage(c, message, true)
 		c.JSON(statusCode, gin.H{
 			"error": gin.H{
-				"message": common.MessageWithRequestId(message, c.GetString(common.RequestIdKey)),
+				"message": clientMessage,
 				"type":    "new_api_error",
 				"code":    codeStr,
 			},
@@ -45,8 +47,9 @@ func invalidRequestStatus(err error) int {
 }
 
 func abortWithMidjourneyMessage(c *gin.Context, statusCode int, code int, description string) {
+	clientMessage, _ := service.ClientErrorMessage(c, description, false)
 	c.JSON(statusCode, gin.H{
-		"description": description,
+		"description": clientMessage,
 		"type":        "new_api_error",
 		"code":        code,
 	})

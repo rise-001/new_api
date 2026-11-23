@@ -94,6 +94,7 @@ type responsesWSCallState struct {
 }
 
 type responsesWSSession struct {
+	clientContext  *gin.Context
 	ctx            context.Context
 	cancel         context.CancelFunc
 	client         *websocket.Conn
@@ -129,10 +130,11 @@ type responsesWSSession struct {
 
 func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn, runner ResponsesWSRequestRunner) *types.NewAPIError {
 	ctx, cancel := context.WithCancel(c.Request.Context())
-	s := &responsesWSSession{ctx: ctx, cancel: cancel, client: client, runner: runner,
+	s := &responsesWSSession{ctx: ctx, cancel: cancel, client: client, runner: runner, clientContext: c.Copy(),
 		request: c.Request.Clone(ctx), requestID: c.GetString(common.RequestIdKey)}
 	if s.requestID == "" {
 		s.requestID = common.NewRequestId()
+		s.clientContext.Set(common.RequestIdKey, s.requestID)
 	}
 	maxMB := appconstant.MaxRequestBodyMB
 	if maxMB <= 0 {
@@ -229,13 +231,13 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 	request.Header.Set("Content-Type", "application/json")
 	apiErr = s.runner(request, requestID, func(c *gin.Context) *types.NewAPIError {
 		if parseErr != nil {
-			return newResponsesWSInvalidRequestError(parseErr)
+			return service.ClientRelayError(c, newResponsesWSInvalidRequestError(parseErr), false)
 		}
 		c.Request.Body = io.NopCloser(bytes.NewReader(create.Body))
 		c.Request.ContentLength = int64(len(create.Body))
 		callErr := s.runCall(c, state, create)
 		upstreamURLs = common.UpstreamAddresses(c)
-		return callErr
+		return service.ClientRelayError(c, callErr, false)
 	})
 	if apiErr != nil && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
 		state.closeCode = websocket.ClosePolicyViolation
@@ -423,7 +425,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if stopErr == nil {
 			return &incoming
 		}
-		openAIErr := stopErr.ToOpenAIError(common.UpstreamAddresses(c)...)
+		openAIErr := service.ClientRelayError(c, stopErr, false).ToOpenAIError(common.UpstreamAddresses(c)...)
 		body, _ := common.Marshal(&responsesWSErrorEvent{Type: "error", Status: stopErr.StatusCode, EventID: create.EventID, StreamID: create.StreamID, ResponseID: responseID, Error: &openAIErr})
 		return &responsesWSMessage{kind: websocket.TextMessage, body: body}
 	}
@@ -881,7 +883,7 @@ func (s *responsesWSSession) sendError(eventID, streamID string, apiErr *types.N
 	if apiErr == nil {
 		return
 	}
-	payload, err := buildResponsesWSErrorPayload(eventID, streamID, apiErr)
+	payload, err := buildResponsesWSErrorPayload(eventID, streamID, service.ClientRelayError(s.clientContext, apiErr, false))
 	if err == nil {
 		_ = s.writeClient(websocket.TextMessage, payload)
 	}

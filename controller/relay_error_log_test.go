@@ -4,13 +4,18 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -96,6 +101,80 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	for _, key := range []string{"channel_id", "channel_name", "channel_type"} {
 		assert.NotContains(t, userOther, key)
 	}
+}
+
+func TestClientErrorMasking(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	db, dialect := openTaskDialectDatabase(t, &model.Option{}, &model.SystemTask{}, &model.Log{}, &model.User{})
+	oldDB, oldLog := model.DB, model.LOG_DB
+	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	oldOptions, oldErrorLog := common.OptionMap, constant.ErrorLogEnabled
+	oldRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(dialect, dialect)
+	common.OptionMap = map[string]string{}
+	constant.ErrorLogEnabled = true
+	const key = operation_setting.ClientErrorMaskOptionKey
+	t.Cleanup(func() {
+		patterns, err := operation_setting.CompileClientErrorPatterns(oldOptions[key])
+		require.NoError(t, err)
+		patterns.Apply()
+		model.DB, model.LOG_DB = oldDB, oldLog
+		common.SetDatabaseTypes(oldMainType, oldLogType)
+		common.OptionMap, constant.ErrorLogEnabled = oldOptions, oldErrorLog
+		common.RedisEnabled = oldRedis
+	})
+	const rules = "(?i)no available channel\r\n\n无可用渠道"
+	require.NoError(t, model.UpdateOption(key, rules))
+	require.EqualError(t, model.UpdateOption(key, "discard\n["), "Invalid regular expression on line 2")
+	var saved model.Option
+	require.NoError(t, db.First(&saved, &model.Option{Key: key}).Error)
+	assert.Equal(t, rules, saved.Value)
+
+	require.NoError(t, db.Create(&model.User{Id: 7, Username: "mask-test", Group: "default"}).Error)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("id", 7)
+	ctx.Request.Header.Set("Accept-Language", "zh-CN")
+	ctx.Set(common.RequestIdKey, "mask-test-id")
+	upstream := types.WithOpenAIError(types.OpenAIError{Type: "upstream_error", Code: "unavailable", Message: "No available channel", Metadata: []byte(`{"detail":"provider detail"}`)}, http.StatusServiceUnavailable)
+	service.RecordRelayErrorLog(ctx, 0, upstream, nil)
+	want := "请求失败，如果多次出现，请联系客服 (request id: mask-test-id)"
+	client := service.ClientRelayError(ctx, upstream, true)
+	assert.Equal(t, http.StatusServiceUnavailable, client.StatusCode)
+	assert.Equal(t, want, client.ToOpenAIError().Message)
+	assert.Empty(t, client.ToOpenAIError().Metadata)
+	assert.Equal(t, want, client.ToClaudeError().Message)
+	var stored model.Log
+	require.NoError(t, db.First(&stored, &model.Log{RequestId: "mask-test-id"}).Error)
+	assert.Contains(t, stored.Content, "No available channel")
+	assert.NotContains(t, stored.Content, want)
+
+	claude := types.WithClaudeError(types.ClaudeError{Type: "api_error", Message: "无可用渠道"}, http.StatusServiceUnavailable)
+	assert.Equal(t, want, service.ClientRelayError(ctx, claude, false).ToClaudeError().Message)
+	assert.Equal(t, "无可用渠道", claude.ToClaudeError().Message)
+	message, masked := service.ClientErrorMessage(ctx, "another error", false)
+	assert.False(t, masked)
+	assert.Equal(t, "another error", message)
+
+	require.NoError(t, model.UpdateOption(key, "(?i)model"))
+	engine := gin.New()
+	engine.Use(middleware.RequestId())
+	engine.POST("/v1/chat/completions", middleware.Distribute())
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept-Language", "en")
+	reply := httptest.NewRecorder()
+	engine.ServeHTTP(reply, request)
+	require.Equal(t, http.StatusBadRequest, reply.Code)
+	requestID := reply.Header().Get(common.RequestIdKey)
+	require.NotEmpty(t, requestID)
+	var body struct{ Error types.OpenAIError }
+	require.NoError(t, common.Unmarshal(reply.Body.Bytes(), &body))
+	assert.Equal(t, "Request failed. If this happens repeatedly, please contact support (request id: "+requestID+")", body.Error.Message)
+	require.NoError(t, model.UpdateOption(key, ""))
+	assert.Equal(t, "无可用渠道", service.ClientRelayError(ctx, claude, false).ToClaudeError().Message)
 }
 
 func TestProcessChannelErrorRecordsSelectedGroup(t *testing.T) {
