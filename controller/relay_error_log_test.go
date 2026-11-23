@@ -140,7 +140,7 @@ func TestClientErrorMasking(t *testing.T) {
 	ctx.Set(common.RequestIdKey, "mask-test-id")
 	upstream := types.WithOpenAIError(types.OpenAIError{Type: "upstream_error", Code: "unavailable", Message: "No available channel", Metadata: []byte(`{"detail":"provider detail"}`)}, http.StatusServiceUnavailable)
 	service.RecordRelayErrorLog(ctx, 0, upstream, nil)
-	want := "请求失败，如果多次出现，请联系客服 (request id: mask-test-id)"
+	want := "如果多次出现，请联系客服 (request id: mask-test-id)"
 	client := service.ClientRelayError(ctx, upstream, true)
 	assert.Equal(t, http.StatusServiceUnavailable, client.StatusCode)
 	assert.Equal(t, want, client.ToOpenAIError().Message)
@@ -172,7 +172,7 @@ func TestClientErrorMasking(t *testing.T) {
 	require.NotEmpty(t, requestID)
 	var body struct{ Error types.OpenAIError }
 	require.NoError(t, common.Unmarshal(reply.Body.Bytes(), &body))
-	assert.Equal(t, "Request failed. If this happens repeatedly, please contact support (request id: "+requestID+")", body.Error.Message)
+	assert.Equal(t, "If this happens repeatedly, please contact support (request id: "+requestID+")", body.Error.Message)
 	require.NoError(t, model.UpdateOption(key, ""))
 	assert.Equal(t, "无可用渠道", service.ClientRelayError(ctx, claude, false).ToClaudeError().Message)
 }
