@@ -116,4 +116,4 @@ setting.test_no_email: "No notification email is configured and your account has
 setting.test_notify_title: "Test notification"
 setting.test_notify_content: "This is a test notification. Receiving it means your current notification settings work."
 setting.saved: "Settings updated"
-relay.masked_client_error: "If this happens repeatedly, please contact support"
+relay.masked_client_error: "Request error: If this happens repeatedly, please contact support"
