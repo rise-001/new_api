@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -105,11 +106,25 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 
 func TestClientErrorMasking(t *testing.T) {
 	require.NoError(t, i18n.Init())
-	db, dialect := openTaskDialectDatabase(t, &model.Option{}, &model.SystemTask{}, &model.Log{}, &model.User{})
+	dialect := common.DatabaseType(os.Getenv("TEST_TASK_DB_DIALECT"))
+	if dialect == "" {
+		dialect = common.DatabaseTypeSQLite
+	}
+	var dsn string
+	switch dialect {
+	case common.DatabaseTypeMySQL:
+		dsn = os.Getenv("TEST_MYSQL_DSN")
+	case common.DatabaseTypePostgreSQL:
+		dsn = os.Getenv("TEST_POSTGRES_DSN")
+	}
+	db, _ := newAuditTestDatabase(t, string(dialect), dsn)
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.SystemTask{}, &model.Log{}, &model.User{}))
 	oldDB, oldLog := model.DB, model.LOG_DB
 	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
 	oldOptions, oldErrorLog := common.OptionMap, constant.ErrorLogEnabled
+	oldLanguage := common.DefaultLanguage
 	oldRedis := common.RedisEnabled
+	common.DefaultLanguage = i18n.LangZhCN
 	common.RedisEnabled = false
 	model.DB, model.LOG_DB = db, db
 	common.SetDatabaseTypes(dialect, dialect)
@@ -123,9 +138,10 @@ func TestClientErrorMasking(t *testing.T) {
 		model.DB, model.LOG_DB = oldDB, oldLog
 		common.SetDatabaseTypes(oldMainType, oldLogType)
 		common.OptionMap, constant.ErrorLogEnabled = oldOptions, oldErrorLog
+		common.DefaultLanguage = oldLanguage
 		common.RedisEnabled = oldRedis
 	})
-	const rules = "(?i)no available channel\r\n\n无可用渠道"
+	const rules = "(?i)no available channel\r\n\n无可用渠道\n^无权访问"
 	require.NoError(t, model.UpdateOption(key, rules))
 	require.EqualError(t, model.UpdateOption(key, "discard\n["), "Invalid regular expression on line 2")
 	var saved model.Option
@@ -150,6 +166,42 @@ func TestClientErrorMasking(t *testing.T) {
 	require.NoError(t, db.First(&stored, &model.Log{RequestId: "mask-test-id"}).Error)
 	assert.Contains(t, stored.Content, "No available channel")
 	assert.NotContains(t, stored.Content, want)
+
+	const originalLog = "status_code=403, 无权访问 Gemini 分组"
+	require.NoError(t, db.Create(&model.Log{
+		UserId: 7, TokenId: 11, Type: model.LogTypeError, CreatedAt: time.Now().Unix(),
+		RequestId: "historical-403", Content: originalLog,
+	}).Error)
+	const maskedLog = "如果多次出现，请联系客服 (request id: historical-403)"
+	const query = "request_id=historical-403"
+	for _, view := range []struct {
+		name    string
+		handler gin.HandlerFunc
+		role    int
+		want    string
+	}{
+		{"user", GetUserLogs, common.RoleCommonUser, maskedLog},
+		{"admin", GetAllLogs, common.RoleAdminUser, originalLog},
+		{"admin self", GetUserLogs, common.RoleAdminUser, originalLog},
+	} {
+		t.Run(view.name, func(t *testing.T) {
+			list := callLogHandler(t, view.handler, 7, view.role, query)[0]
+			require.Equal(t, true, list["success"])
+			items := list["data"].(map[string]any)["items"].([]any)
+			require.Len(t, items, 1)
+			assert.Equal(t, view.want, items[0].(map[string]any)["content"])
+		})
+	}
+	export := callLogHandler(t, ExportUserLogs, 7, common.RoleCommonUser, query)
+	require.Len(t, export, 2)
+	assert.Equal(t, maskedLog, export[0]["content"])
+	tokenLogs := callLogHandler(t, func(c *gin.Context) {
+		c.Set("token_id", 11)
+		GetLogByKey(c)
+	}, 7, common.RoleCommonUser, "")[0]
+	require.Equal(t, true, tokenLogs["success"])
+	require.Len(t, tokenLogs["data"], 1)
+	assert.Equal(t, maskedLog, tokenLogs["data"].([]any)[0].(map[string]any)["content"])
 
 	claude := types.WithClaudeError(types.ClaudeError{Type: "api_error", Message: "无可用渠道"}, http.StatusServiceUnavailable)
 	assert.Equal(t, want, service.ClientRelayError(ctx, claude, false).ToClaudeError().Message)

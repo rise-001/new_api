@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
@@ -103,7 +104,8 @@ func GetAllLogs(c *gin.Context) {
 func GetUserLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	filter := logFilterFromQuery(c, false)
-	if c.GetInt("role") < common.RoleAdminUser {
+	isRegularUser := c.GetInt("role") < common.RoleAdminUser
+	if isRegularUser {
 		startTimestamp, err := limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp)
 		if err != nil {
 			common.ApiError(c, err)
@@ -115,6 +117,11 @@ func GetUserLogs(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if isRegularUser {
+		for _, log := range logs {
+			maskUserErrorLog(c, log)
+		}
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
@@ -168,7 +175,11 @@ func exportLogs(c *gin.Context, all bool) {
 	c.Status(http.StatusOK)
 
 	count := 0
+	maskErrors := !all && c.GetInt("role") < common.RoleAdminUser
 	writeLog := func(log *model.Log) error {
+		if maskErrors {
+			maskUserErrorLog(c, log)
+		}
 		line, err := common.Marshal(log)
 		if err != nil {
 			return err
@@ -221,11 +232,32 @@ func GetLogByKey(c *gin.Context) {
 		})
 		return
 	}
+	for _, log := range logs {
+		maskUserErrorLog(c, log)
+	}
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
 		"data":    logs,
 	})
+}
+
+func maskUserErrorLog(c *gin.Context, log *model.Log) {
+	if log.Type != model.LogTypeError {
+		return
+	}
+	message := log.Content
+	// The log adds an HTTP status prefix before storing the relay error message.
+	if statusAndMessage, ok := strings.CutPrefix(message, "status_code="); ok {
+		if status, content, found := strings.Cut(statusAndMessage, ", "); found {
+			if _, err := strconv.Atoi(status); err == nil {
+				message = content
+			}
+		}
+	}
+	if masked, matched := service.MaskedClientErrorMessage(c, message, log.RequestId); matched {
+		log.Content = masked
+	}
 }
 
 func GetLogsStat(c *gin.Context) {

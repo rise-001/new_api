@@ -19,18 +19,30 @@ import (
 // ClientErrorMessage formats the message sent to an API client. A match always
 // carries the gateway request ID, including on protocols that normally omit it.
 func ClientErrorMessage(c *gin.Context, message string, withRequestID bool) (string, bool) {
-	matched := operation_setting.MatchesClientError(message)
-	if matched {
-		lang := i18n.StatedLang(c)
-		if lang == "" && common.DefaultLanguage == "" {
-			lang = i18n.LangZhCN
-		}
-		message = i18n.Translate(lang, i18n.MsgRelayMaskedClientError)
+	requestID := c.GetString(common.RequestIdKey)
+	if masked, matched := MaskedClientErrorMessage(c, message, requestID); matched {
+		return masked, true
 	}
-	if matched || withRequestID {
-		message = common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))
+	if withRequestID {
+		message = common.MessageWithRequestId(message, requestID)
 	}
-	return message, matched
+	return message, false
+}
+
+// MaskedClientErrorMessage uses the request ID of the failure being displayed.
+func MaskedClientErrorMessage(c *gin.Context, message, requestID string) (string, bool) {
+	if !operation_setting.MatchesClientError(message) {
+		return message, false
+	}
+	lang := i18n.StatedLang(c)
+	if lang == "" && common.DefaultLanguage == "" {
+		lang = i18n.LangZhCN
+	}
+	message = i18n.Translate(lang, i18n.MsgRelayMaskedClientError)
+	if requestID != "" {
+		message = common.MessageWithRequestId(message, requestID)
+	}
+	return message, true
 }
 
 // ClientRelayError keeps the upstream error available to logs and report hooks.
