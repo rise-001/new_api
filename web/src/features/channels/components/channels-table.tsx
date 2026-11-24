@@ -581,6 +581,7 @@ export function ChannelsTable() {
                 columnId: 'group',
                 title: t('Group'),
                 options: groupFilterOptions,
+                translateOptionLabels: false,
                 singleSelect: true,
               },
             ],

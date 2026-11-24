@@ -41,6 +41,8 @@ type FilterDef = {
     iconNode?: React.ReactNode
     count?: number
   }[]
+  /** Set to false when option labels are already display-ready, such as group names. */
+  translateOptionLabels?: boolean
   singleSelect?: boolean
 }
 
@@ -270,13 +272,20 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
             key={filter.columnId}
             column={column}
             title={filter.title}
-            options={filter.options}
+            options={
+              filter.translateOptionLabels === false
+                ? filter.options
+                : filter.options.map((option) => ({
+                    ...option,
+                    label: t(option.label),
+                  }))
+            }
             singleSelect={filter.singleSelect}
           />
         )
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.filters, props.table]
+    [props.filters, props.table, t]
   )
 
   const handleReset = () => {

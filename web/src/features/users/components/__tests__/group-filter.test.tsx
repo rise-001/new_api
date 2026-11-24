@@ -26,9 +26,12 @@ import {
 } from '@tanstack/react-router'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { createInstance } from 'i18next'
+import { I18nextProvider } from 'react-i18next'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { TooltipProvider } from '@/components/ui/tooltip'
+import zh from '@/i18n/locales/zh.json'
 import { api } from '@/lib/api'
 import { Route as UsersRoute } from '@/routes/_authenticated/users/index'
 import { useAuthStore } from '@/stores/auth-store'
@@ -52,10 +55,12 @@ afterEach(() => {
   useAuthStore.getState().auth.reset()
 })
 
-async function renderUsers(initialEntry = '/users/') {
+async function renderUsers(initialEntry = '/users/', language = 'en') {
+  const i18n = createInstance()
+  await i18n.init({ lng: language, resources: { en: {}, zh } })
   const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
     if (url === '/api/group/') {
-      return { data: { success: true, data: ['default', 'premium'] } }
+      return { data: { success: true, data: ['default', 'premium', 'image'] } }
     }
     return {
       data: {
@@ -104,7 +109,9 @@ async function renderUsers(initialEntry = '/users/') {
   await router.load()
   render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
+      <I18nextProvider i18n={i18n}>
+        <RouterProvider router={router} />
+      </I18nextProvider>
     </QueryClientProvider>
   )
   await screen.findByText('premium-user')
@@ -113,9 +120,9 @@ async function renderUsers(initialEntry = '/users/') {
 
 // The User Group column header is a sort menu with the same name; the
 // filter chip is the one that opens a dialog.
-function getGroupFilterTrigger() {
+function getGroupFilterTrigger(name = /^User Group/) {
   const trigger = screen
-    .getAllByRole('button', { name: /^User Group/ })
+    .getAllByRole('button', { name })
     .find((button) => button.getAttribute('aria-haspopup') === 'dialog')
   expect(trigger).toBeDefined()
   return trigger as HTMLElement
@@ -151,4 +158,19 @@ it('restores the user group filter from the page URL on load', async () => {
   expect(get).toHaveBeenCalledWith(premiumSearchUrl)
   expect(get).not.toHaveBeenCalledWith('/api/user/', expect.anything())
   expect(getGroupFilterTrigger()).toHaveTextContent('premium')
+})
+
+it('displays the configured group name in the Chinese filter and sends it in the search', async () => {
+  const user = userEvent.setup()
+  const { get } = await renderUsers('/users/', 'zh')
+  const trigger = getGroupFilterTrigger(/^用户分组/)
+  await user.click(trigger)
+  const option = await screen.findByRole('option', { name: /^image/ })
+  await user.click(option)
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/user/search?keyword=&group=image&p=1&page_size=20'
+    )
+  )
+  expect(trigger).toHaveTextContent('image')
 })

@@ -246,6 +246,7 @@ export function UsersTable() {
           {
             columnId: 'group',
             title: t('User Group'),
+            translateOptionLabels: false,
             options: (groupsData?.data ?? []).map((group) => ({
               label: group,
               value: group,
