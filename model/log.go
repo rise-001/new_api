@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -240,21 +241,103 @@ type quotaAdditionLogOther struct {
 	Op struct {
 		Action string `json:"action"`
 		Params struct {
-			Quota        string `json:"quota"`
-			From         string `json:"from"`
-			To           string `json:"to"`
-			TargetUserId int    `json:"target_user_id"`
+			Quota        json.RawMessage `json:"quota"`
+			To           json.RawMessage `json:"to"`
+			TargetUserId int             `json:"target_user_id"`
 		} `json:"params"`
 	} `json:"op"`
+	ContentParts []struct {
+		Params struct {
+			Quota json.RawMessage `json:"quota"`
+		} `json:"params"`
+	} `json:"content_parts"`
 }
 
 const (
-	quotaAdditionContentPrefix       = "Increased user quota by "
-	legacyQuotaAdditionContentPrefix = "管理员增加用户额度 "
-	quotaSubtractContentPrefix       = "Decreased user quota by "
-	quotaOverrideContentPrefix       = "Overrode user quota from "
-	redemptionContentPrefix          = "通过兑换码充值 "
+	legacyRedemptionPrefix = "通过兑换码充值 "
+	redemptionPrefix       = "Topped up "
+	redemptionSuffix       = " with a redemption code, code ID "
 )
+
+var quotaAdjustmentRecords = []struct {
+	mode, prefix, legacyPrefix string
+}{
+	{"add", "Increased user quota by ", "管理员增加用户额度 "},
+	{"subtract", "Decreased user quota by ", "管理员减少用户额度 "},
+	{"override", "Overrode user quota from ", "管理员覆盖用户额度 "},
+}
+
+// Transfer records may contain display-ready strings or raw integer quota units.
+func formatTransferQuota(value json.RawMessage) string {
+	if quota, err := strconv.Atoi(string(value)); err == nil {
+		return logger.FormatQuota(quota)
+	}
+	var formatted string
+	if len(value) > 0 {
+		_ = common.Unmarshal(value, &formatted)
+	}
+	return formatted
+}
+
+func (record *QuotaAdditionLog) readModeAndAmount(log *Log, details quotaAdditionLogOther) {
+	for _, kind := range quotaAdjustmentRecords {
+		amount, found := strings.CutPrefix(log.Content, kind.prefix)
+		if kind.mode == "override" && found {
+			_, amount, _ = strings.Cut(amount, " to ")
+		}
+		if !found {
+			amount, found = strings.CutPrefix(log.Content, kind.legacyPrefix)
+		}
+		if details.Op.Action != "user.quota_"+kind.mode && !found {
+			continue
+		}
+		record.Mode = kind.mode
+		record.Amount = amount
+		if details.Op.Action == "user.quota_"+kind.mode {
+			quota := details.Op.Params.Quota
+			if kind.mode == "override" {
+				quota = details.Op.Params.To
+			}
+			if formatted := formatTransferQuota(quota); formatted != "" {
+				record.Amount = formatted
+			}
+		}
+		return
+	}
+
+	record.Mode = "topup"
+	if content, found := strings.CutPrefix(log.Content, legacyRedemptionPrefix); found {
+		record.Mode = "redemption"
+		record.Amount, _, _ = strings.Cut(content, "，")
+	} else if content, found := strings.CutPrefix(log.Content, redemptionPrefix); found {
+		if amount, _, found := strings.Cut(content, redemptionSuffix); found {
+			record.Mode = "redemption"
+			record.Amount = amount
+		}
+	}
+	for _, part := range details.ContentParts {
+		if quota := formatTransferQuota(part.Params.Quota); quota != "" {
+			record.Amount = quota
+			return
+		}
+	}
+	if record.Mode == "topup" {
+		for _, marker := range []string{"amount added:", "充值金额:", "充值金额：", "充值额度:", "充值额度："} {
+			if _, amount, found := strings.Cut(log.Content, marker); found {
+				amount, _, _ = strings.Cut(amount, ", payment amount:")
+				amount, _, _ = strings.Cut(amount, "，")
+				record.Amount = strings.TrimSpace(amount)
+				break
+			}
+		}
+		// Older Creem logs wrote the credited quota in raw units.
+		if strings.HasPrefix(log.Content, "使用Creem充值成功") || strings.HasPrefix(log.Content, "Creem top-up succeeded,") {
+			if quota, err := strconv.Atoi(record.Amount); err == nil {
+				record.Amount = logger.LogQuota(quota)
+			}
+		}
+	}
+}
 
 func GetQuotaAdditionLogs(startTimestamp int64, endTimestamp int64, username string, startIdx int, num int, mode string) (records []*QuotaAdditionLog, total int64, err error) {
 	switch mode {
@@ -275,31 +358,33 @@ func GetQuotaAdditionLogs(startTimestamp int64, endTimestamp int64, username str
 		actionPrefix, targetKey = `user.quota\_`, `target\_user\_id`
 	}
 	conditions := LOG_DB.Where("1 = 0")
-	for _, kind := range []string{"topup", "add", "subtract", "override", "redemption"} {
-		if mode != "" && mode != kind {
-			continue
-		}
-		switch kind {
+	redemptionSQL := "logs.content LIKE ? OR logs.content LIKE ?"
+	redemptionArgs := []any{legacyRedemptionPrefix + "%", redemptionPrefix + "%" + redemptionSuffix + "%"}
+	if mode == "redemption" {
+		conditions = conditions.Or(LOG_DB.Where("logs.type = ?", LogTypeTopup).Where(redemptionSQL, redemptionArgs...))
+	}
+	credits := LOG_DB.Where("logs.type = ?", LogTypeTopup)
+	for _, prefix := range []string{"订阅购买成功", "使用余额购买订阅成功", "Subscription purchased,", "Subscription purchased with balance,"} {
+		credits = credits.Where("logs.content NOT LIKE ?", prefix+"%")
+	}
+	if mode == "topup" {
+		credits = credits.Where("NOT ("+redemptionSQL+")", redemptionArgs...)
+	}
+	for _, kind := range quotaAdjustmentRecords {
+		adjustmentSQL := otherJSON + likeOperator + " OR logs.content LIKE ? OR logs.content LIKE ?"
+		args := []any{`%"action":"` + actionPrefix + kind.mode + `"%`, kind.prefix + "%", kind.legacyPrefix + "%"}
+		switch mode {
+		case "":
+			// The credit query already includes adjustments stored as LogTypeTopup.
+			conditions = conditions.Or(LOG_DB.Where("logs.type = ?", LogTypeManage).Where(adjustmentSQL, args...))
+		case kind.mode:
+			conditions = conditions.Or(LOG_DB.Where("logs.type IN ?", []int{LogTypeManage, LogTypeTopup}).Where(adjustmentSQL, args...))
 		case "topup":
-			conditions = conditions.Or(
-				"logs.type = ? AND logs.content NOT LIKE ? AND logs.content NOT LIKE ? AND logs.content NOT LIKE ?",
-				LogTypeTopup, redemptionContentPrefix+"%", "订阅购买成功%", "使用余额购买订阅成功%",
-			)
-		case "redemption":
-			conditions = conditions.Or("logs.type = ? AND logs.content LIKE ?", LogTypeTopup, redemptionContentPrefix+"%")
-		default:
-			prefix := quotaAdditionContentPrefix
-			legacyPrefix := legacyQuotaAdditionContentPrefix
-			if kind == "subtract" {
-				prefix, legacyPrefix = quotaSubtractContentPrefix, "管理员减少用户额度 "
-			} else if kind == "override" {
-				prefix, legacyPrefix = quotaOverrideContentPrefix, "管理员覆盖用户额度 "
-			}
-			conditions = conditions.Or(
-				"logs.type = ? AND ("+otherJSON+likeOperator+" OR logs.content LIKE ? OR logs.content LIKE ?)",
-				LogTypeManage, `%"action":"`+actionPrefix+kind+`"%`, prefix+"%", legacyPrefix+"%",
-			)
+			credits = credits.Where("NOT ("+adjustmentSQL+")", args...)
 		}
+	}
+	if mode == "" || mode == "topup" {
+		conditions = conditions.Or(credits)
 	}
 	tx := LOG_DB.Model(&Log{}).Where(conditions)
 	if username != "" {
@@ -354,68 +439,17 @@ func GetQuotaAdditionLogs(startTimestamp int64, endTimestamp int64, username str
 			CreatedAt: log.CreatedAt,
 		}
 		var details quotaAdditionLogOther
-		if log.Type == LogTypeTopup {
-			record.Mode = "topup"
-			if strings.HasPrefix(log.Content, redemptionContentPrefix) {
-				record.Mode = "redemption"
-				record.Amount, _, _ = strings.Cut(strings.TrimPrefix(log.Content, redemptionContentPrefix), "，")
-			} else {
-				for _, marker := range []string{"充值金额:", "充值金额：", "充值额度:", "充值额度："} {
-					if _, amount, found := strings.Cut(log.Content, marker); found {
-						record.Amount, _, _ = strings.Cut(strings.TrimSpace(amount), "，")
-						break
-					}
-				}
-				// Old Creem logs store raw quota units instead of formatted currency.
-				if strings.HasPrefix(log.Content, "使用Creem充值成功") {
-					if quota, parseErr := strconv.Atoi(record.Amount); parseErr == nil {
-						record.Amount = logger.LogQuota(quota)
-					}
-				}
-			}
-			if record.Amount == "" {
-				record.Amount = "—"
-			}
-		} else if common.UnmarshalJsonStr(log.Other, &details) == nil {
-			switch details.Op.Action {
-			case "user.quota_add":
-				record.Mode = "add"
-				record.Amount = details.Op.Params.Quota
-			case "user.quota_subtract":
-				record.Mode = "subtract"
-				record.Amount = details.Op.Params.Quota
-			case "user.quota_override":
-				record.Mode = "override"
-				record.Amount = details.Op.Params.To
-			}
-			if details.Op.Params.TargetUserId > 0 {
-				record.UserId = details.Op.Params.TargetUserId
-				record.Username = ""
-				targetUserIds = append(targetUserIds, record.UserId)
-			}
+		if log.Other != "" && common.UnmarshalJsonStr(log.Other, &details) != nil {
+			details = quotaAdditionLogOther{}
+		}
+		record.readModeAndAmount(log, details)
+		if log.Type == LogTypeManage && details.Op.Params.TargetUserId > 0 {
+			record.UserId = details.Op.Params.TargetUserId
+			record.Username = ""
+			targetUserIds = append(targetUserIds, record.UserId)
 		}
 		if record.Amount == "" {
-			// legacy records without structured op
-			switch {
-			case strings.HasPrefix(log.Content, quotaAdditionContentPrefix):
-				record.Mode = "add"
-				record.Amount = strings.TrimPrefix(log.Content, quotaAdditionContentPrefix)
-			case strings.HasPrefix(log.Content, legacyQuotaAdditionContentPrefix):
-				record.Mode = "add"
-				record.Amount = strings.TrimPrefix(log.Content, legacyQuotaAdditionContentPrefix)
-			case strings.HasPrefix(log.Content, quotaSubtractContentPrefix):
-				record.Mode = "subtract"
-				record.Amount = strings.TrimPrefix(log.Content, quotaSubtractContentPrefix)
-			case strings.HasPrefix(log.Content, quotaOverrideContentPrefix):
-				record.Mode = "override"
-				_, record.Amount, _ = strings.Cut(strings.TrimPrefix(log.Content, quotaOverrideContentPrefix), " to ")
-			case strings.HasPrefix(log.Content, "管理员减少用户额度 "):
-				record.Mode = "subtract"
-				record.Amount = strings.TrimPrefix(log.Content, "管理员减少用户额度 ")
-			case strings.HasPrefix(log.Content, "管理员覆盖用户额度 "):
-				record.Mode = "override"
-				record.Amount = strings.TrimPrefix(log.Content, "管理员覆盖用户额度 ")
-			}
+			record.Amount = "—"
 		}
 		records = append(records, record)
 	}
